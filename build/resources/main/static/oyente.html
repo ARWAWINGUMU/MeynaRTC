@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MeynaRTC - Oyente</title>
+  <style>
+    :root {
+      --bg: #07111f;
+      --panel: rgba(13, 24, 39, 0.95);
+      --accent: #5ee7d4;
+      --accent-2: #4f9cff;
+      --text: #f6fbff;
+      --muted: #8ea4bf;
+      --border: rgba(255,255,255,0.14);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", Arial, sans-serif;
+      color: var(--text);
+      background: linear-gradient(140deg, var(--bg), #10253b 60%, #0e1d2b);
+      min-height: 100vh;
+      padding: 24px;
+    }
+    .card { width: min(980px, 100%); background: var(--panel); border: 1px solid var(--border); border-radius: 24px; box-shadow: 0 20px 60px rgba(0,0,0,0.35); padding: 24px; backdrop-filter: blur(8px); margin: 0 auto; }
+    h1 { margin-top: 0; }
+    p { color: var(--muted); line-height: 1.6; }
+    input, button { width: 100%; border: none; border-radius: 12px; padding: 12px 14px; font-size: 1rem; margin-top: 10px; }
+    button { cursor: pointer; color: white; background: linear-gradient(135deg, var(--accent), var(--accent-2)); font-weight: 600; }
+    .secondary { background: #17283e; border: 1px solid var(--border); }
+    .status { margin-top: 12px; font-weight: 600; color: var(--accent); }
+    .preview { width: 100%; border-radius: 16px; background: #02070d; min-height: 240px; object-fit: cover; border: 1px solid var(--border); }
+    .grid { display: grid; gap: 12px; grid-template-columns: 1fr 1fr; }
+    .file-list { margin-top: 10px; display: grid; gap: 8px; }
+    .file-item { background: rgba(255,255,255,0.04); border: 1px solid var(--border); border-radius: 10px; padding: 10px; }
+    @media (max-width: 800px) { .grid { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Modo oyente</h1>
+    <p>El oyente entra libremente, recibe el stream que corresponda al modo activo y puede visualizar o descargar archivos enviados por DataChannel.</p>
+    <input id="room" value="demo" placeholder="Nombre de la sala" />
+    <input id="listenerName" placeholder="Nombre visible (opcional)" />
+    <button id="joinBtn">Conectarme a la sala</button>
+    <button class="secondary" id="backBtn">Volver al inicio</button>
+    <div id="status" class="status">Esperando para conectarse...</div>
+    <div class="grid" style="margin-top: 12px;">
+      <div>
+        <audio id="remoteAudio" autoplay playsinline></audio>
+        <video id="remoteVideo" class="preview" autoplay playsinline></video>
+      </div>
+      <div>
+        <p class="status">El panel de métricas se mantiene en el emisor para que cada oyente reporte su recepción de forma privada.</p>
+      </div>
+    </div>
+    <h3>Archivos recibidos</h3>
+    <div id="fileList" class="file-list"></div>
+  </div>
+
+  <script>
+    // =====================================================
+    // PÁGINA DEL OYENTE
+    // =====================================================
+    // El oyente recibe el MediaStream correspondiente al modo elegido por el emisor.
+    // Además puede visualizar archivos enviados mediante DataChannel.
+
+    const roomInput = document.getElementById('room');
+    const listenerNameInput = document.getElementById('listenerName');
+    const joinBtn = document.getElementById('joinBtn');
+    const backBtn = document.getElementById('backBtn');
+    const status = document.getElementById('status');
+    const remoteAudio = document.getElementById('remoteAudio');
+    const remoteVideo = document.getElementById('remoteVideo');
+    const fileList = document.getElementById('fileList');
+
+    let socket = null;
+    let room = '';
+    let clientId = '';
+    let receiverName = '';
+    let peerConnection = null;
+    let statsTimer = null;
+    let lastStats = { bytesReceived: 0, timestamp: performance.now() };
+
+    function generateClientId() {
+      return 'listener-' + Math.random().toString(36).slice(2, 10);
+    }
+
+    function buildSocketUrl() {
+      const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+      return `${protocol}://${window.location.host}/ws/${room}/oyente`;
+    }
+
+    function sendSignal(type, payload = {}) {
+      if (!socket || socket.readyState !== WebSocket.OPEN) return;
+      socket.send(JSON.stringify({ type, sender: 'oyente', room, payload, clientId }));
+    }
+
+    function setupDataChannel(channel) {
+      channel.binaryType = 'arraybuffer';
+      channel.onopen = () => { status.textContent = 'Canal de datos listo'; };
+      channel.onmessage = (event) => {
+        if (typeof event.data === 'string') {
+          const message = JSON.parse(event.data);
+          if (message.type === 'meta') {
+            channel.__pendingFile = { name: message.name, mime: message.mime, size: message.size, chunks: [], received: 0 };
+            status.textContent = `Recibiendo ${message.name}`;
+          } else if (message.type === 'done') {
+            const pending = channel.__pendingFile;
+            if (pending) {
+              const blob = new Blob(pending.chunks, { type: pending.mime });
+              const url = URL.createObjectURL(blob);
+              const item = document.createElement('div');
+              item.className = 'file-item';
+              item.innerHTML = `<strong>${pending.name}</strong><br><a href="${url}" target="_blank" download="${pending.name}">Descargar</a>`;
+              if (pending.mime.startsWith('image/')) {
+                item.innerHTML += `<br><img src="${url}" style="max-width:100%;margin-top:8px;border-radius:10px" />`;
+              } else if (pending.mime.startsWith('audio/')) {
+                item.innerHTML += `<br><audio controls src="${url}" style="width:100%;margin-top:8px"></audio>`;
+              } else if (pending.mime.startsWith('video/')) {
+                item.innerHTML += `<br><video controls src="${url}" style="width:100%;margin-top:8px"></video>`;
+              }
+              fileList.prepend(item);
+              status.textContent = `Archivo recibido: ${pending.name}`;
+            }
+          }
+        } else {
+          const pending = channel.__pendingFile;
+          if (pending) {
+            pending.chunks.push(event.data);
+            pending.received += event.data.byteLength;
+            if (pending.received >= pending.size) {
+              channel.send(JSON.stringify({ type: 'done' }));
+            }
+          }
+        }
+      };
+    }
+
+    async function handleOffer(offer) {
+      if (!peerConnection) {
+        peerConnection = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+        peerConnection.ontrack = (event) => {
+          const [stream] = event.streams;
+          const hasVideo = stream.getVideoTracks().length > 0;
+          remoteVideo.srcObject = hasVideo ? stream : null;
+          remoteAudio.srcObject = hasVideo ? null : stream;
+          remoteVideo.style.display = hasVideo ? 'block' : 'none';
+          remoteAudio.style.display = hasVideo ? 'none' : 'block';
+          status.textContent = hasVideo ? 'Transmitiendo video o pantalla' : 'Transmitiendo audio';
+        };
+        peerConnection.onicecandidate = (event) => {
+          if (event.candidate) {
+            sendSignal('candidate', event.candidate.toJSON());
+          }
+        };
+        peerConnection.oniceconnectionstatechange = () => {
+          status.textContent = `ICE: ${peerConnection.iceConnectionState}`;
+        };
+        peerConnection.onconnectionstatechange = () => {
+          if (peerConnection.connectionState === 'connected') {
+            status.textContent = 'Conectado';
+            startReceiverStatsMonitor(peerConnection);
+          }
+        };
+        peerConnection.ondatachannel = (event) => {
+          setupDataChannel(event.channel);
+        };
+      }
+      await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
+      const answer = await peerConnection.createAnswer();
+      await peerConnection.setLocalDescription(answer);
+      sendSignal('answer', { type: answer.type, sdp: answer.sdp });
+    }
+
+    function connectSignalServer() {
+      socket = new WebSocket(buildSocketUrl());
+      socket.onopen = () => {
+        status.textContent = 'Conectado al servidor de señalización';
+        sendSignal('join', { receiverId: clientId, receiverName });
+      };
+      socket.onmessage = async (event) => {
+        const message = JSON.parse(event.data);
+        if (message.type === 'offer') {
+          await handleOffer(message.payload);
+          return;
+        }
+        if (message.type === 'candidate' && peerConnection) {
+          await peerConnection.addIceCandidate(new RTCIceCandidate(message.payload));
+        }
+      };
+      socket.onerror = () => {
+        status.textContent = 'Error en la conexión WebSocket';
+      };
+    }
+
+    function startReceiverStatsMonitor(connection) {
+      if (statsTimer) clearInterval(statsTimer);
+      statsTimer = setInterval(async () => {
+        const stats = await connection.getStats();
+        let bitrateKbps = 0;
+        let jitterMs = 0;
+        let packetLossPercent = 0;
+        let rttMs = 0;
+        let bytesReceived = 0;
+        let packetsReceived = 0;
+        let packetsLost = 0;
+        stats.forEach(report => {
+          if (report.type === 'inbound-rtp') {
+            bytesReceived = report.bytesReceived || 0;
+            packetsReceived = report.packetsReceived || 0;
+            packetsLost = report.packetsLost || 0;
+            jitterMs = report.jitter ? report.jitter * 1000 : 0;
+            packetLossPercent = (packetsLost + packetsReceived) > 0 ? (packetsLost / (packetsLost + packetsReceived)) * 100 : 0;
+          }
+          if (report.type === 'candidate-pair' && report.currentRoundTripTime) {
+            rttMs = report.currentRoundTripTime * 1000;
+          }
+        });
+        const deltaMs = Math.max(performance.now() - lastStats.timestamp, 1);
+        const deltaBytes = Math.max(bytesReceived - lastStats.bytesReceived, 0);
+        bitrateKbps = Math.round(((deltaBytes * 8) / (deltaMs / 1000)) / 1024);
+        lastStats = { bytesReceived, timestamp: performance.now() };
+        sendSignal('receiver-stats', {
+          receiverId: clientId,
+          receiverName,
+          bitrateKbps,
+          jitterMs,
+          packetLossPercent,
+          rttMs,
+          bytesReceived,
+          packetsReceived,
+          packetsLost,
+          timestamp: Date.now()
+        });
+      }, 1000);
+    }
+
+    function joinRoom() {
+      room = roomInput.value.trim() || 'demo';
+      clientId = generateClientId();
+      receiverName = listenerNameInput.value.trim() || `Oyente ${clientId.slice(-4)}`;
+      joinBtn.disabled = true;
+      status.textContent = 'Conectando a la sala...';
+      connectSignalServer();
+    }
+
+    window.addEventListener('beforeunload', () => {
+      sendSignal('leave', { receiverId: clientId, receiverName });
+    });
+    joinBtn.addEventListener('click', joinRoom);
+    backBtn.addEventListener('click', () => { window.location.href = '/'; });
+  </script>
+</body>
+</html>

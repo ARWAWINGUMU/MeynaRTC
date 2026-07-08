@@ -1,0 +1,827 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MeynaRTC</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    :root {
+      --bg: #07111f;
+      --panel: rgba(13, 24, 39, 0.95);
+      --accent: #5ee7d4;
+      --accent-2: #4f9cff;
+      --text: #f6fbff;
+      --muted: #8ea4bf;
+      --danger: #ff6b6b;
+      --border: rgba(255,255,255,0.14);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", Arial, sans-serif;
+      color: var(--text);
+      background: linear-gradient(140deg, var(--bg), #10253b 60%, #0e1d2b);
+      min-height: 100vh;
+      padding: 24px;
+    }
+    .card { width: min(1120px, 100%); background: var(--panel); border: 1px solid var(--border); border-radius: 24px; box-shadow: 0 20px 60px rgba(0,0,0,0.35); padding: 24px; backdrop-filter: blur(8px); margin: 0 auto; }
+    .hero { text-align: center; padding: 16px 0 28px; }
+    .hero h1 { margin: 0 0 8px; font-size: 2rem; }
+    .hero p { margin: 0; color: var(--muted); line-height: 1.6; }
+    .actions { display: grid; gap: 14px; grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 20px; }
+    button, input, select { width: 100%; border: none; border-radius: 12px; padding: 12px 14px; font-size: 1rem; }
+    button { cursor: pointer; color: white; font-weight: 600; transition: transform 0.18s ease, opacity 0.18s ease; }
+    button:hover { transform: translateY(-1px); }
+    .primary { background: linear-gradient(135deg, var(--accent), var(--accent-2)); }
+    .secondary { background: #17283e; border: 1px solid var(--border); }
+    .panel { display: none; margin-top: 16px; }
+    .form-grid { display: grid; gap: 12px; margin-top: 12px; }
+    .hint { color: var(--muted); font-size: 0.95rem; margin-top: 8px; }
+    .status { margin-top: 12px; font-weight: 600; color: var(--accent); }
+    .error { color: var(--danger); }
+    .controls { display: grid; gap: 12px; margin-top: 12px; }
+    .row { display: grid; gap: 12px; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .grid-2 { display: grid; gap: 12px; grid-template-columns: 1fr 1fr; }
+    .preview { width: 100%; border-radius: 16px; background: #02070d; border: 1px solid var(--border); min-height: 220px; object-fit: cover; }
+    .metrics-card { background: rgba(255,255,255,0.04); border: 1px solid var(--border); border-radius: 14px; padding: 12px; }
+    .metrics-grid { display: grid; gap: 10px; grid-template-columns: repeat(4, minmax(0, 1fr)); margin-top: 10px; }
+    .chart-box { margin-top: 12px; background: rgba(255,255,255,0.03); padding: 10px; border-radius: 14px; border: 1px solid var(--border); }
+    .small { font-size: 0.9rem; color: var(--muted); }
+    .link-button { background: transparent; color: var(--accent); padding: 0; text-align: left; }
+    .file-list { margin-top: 10px; display: grid; gap: 8px; }
+    .file-item { background: rgba(255,255,255,0.04); border: 1px solid var(--border); border-radius: 10px; padding: 10px; }
+    table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+    th, td { text-align: left; padding: 8px; border-bottom: 1px solid var(--border); font-size: 0.95rem; }
+    @media (max-width: 900px) { .grid-2, .metrics-grid, .row { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="hero" id="landingView">
+      <h1>MeynaRTC</h1>
+      <p>Comunica sin fronteras.</p>
+      <div class="actions">
+        <button class="primary" id="transmitBtn">Transmitir</button>
+        <button class="secondary" id="listenBtn">Escuchar</button>
+      </div>
+    </div>
+
+    <div class="panel" id="loginView">
+      <h2>Acceso para transmisor</h2>
+      <p class="hint">El emisor entra con credenciales. El oyente entra libremente.</p>
+      <form id="loginForm" class="form-grid">
+        <input id="username" placeholder="Usuario" required />
+        <input id="password" type="password" placeholder="Contraseña" required />
+        <div id="captchaBox" class="hint">Cargando captcha...</div>
+        <input id="captchaAnswer" placeholder="Respuesta del captcha" required />
+        <button class="primary" type="submit">Entrar a transmitir</button>
+      </form>
+      <div id="loginError" class="status error"></div>
+      <button class="link-button" id="backToLanding">Volver al inicio</button>
+    </div>
+
+    <div class="panel" id="transmitterView">
+      <h2>Laboratorio multimedia de comunicaciones en tiempo real</h2>
+      <p class="hint">Puedes transmitir audio, cámara + audio o pantalla. También puedes enviar archivos pequeños por DataChannel y ver métricas de múltiples oyentes.</p>
+      <div class="controls">
+        <input id="room" value="demo" placeholder="Nombre de la sala" />
+        <select id="modeSelect">
+          <option value="audio">Solo audio</option>
+          <option value="video">Cámara + audio</option>
+          <option value="screen">Compartir pantalla</option>
+        </select>
+        <div class="row">
+          <button class="primary" id="startBtn">Iniciar transmisión</button>
+          <button class="secondary" id="stopBtn">Detener transmisión</button>
+          <button class="secondary" id="backFromTransmit">Volver</button>
+        </div>
+        <div id="status" class="status">Esperando para iniciar...</div>
+        <div class="grid-2">
+          <div>
+            <video id="localVideo" class="preview" autoplay muted playsinline></video>
+          </div>
+          <div>
+            <label class="hint" for="fileInput">Enviar archivo pequeño por DataChannel (máx. 10 MB)</label>
+            <input id="fileInput" type="file" />
+            <button class="secondary" id="sendFileBtn" style="margin-top: 10px;">Enviar archivo</button>
+            <div id="fileStatus" class="status small">Sin archivos enviados.</div>
+            <div id="fileList" class="file-list"></div>
+          </div>
+        </div>
+        <button class="secondary" id="toggleMetricsBtn">Ver métricas en tiempo real</button>
+        <div id="metricsPanel" style="display: none; margin-top: 12px;">
+          <h3>Métricas de comunicación en tiempo real</h3>
+          <div class="metrics-grid">
+            <div class="metrics-card"><strong>Estado ICE</strong><div id="iceState" class="small">sin conexión</div></div>
+            <div class="metrics-card"><strong>Estado WebRTC</strong><div id="pcState" class="small">sin conexión</div></div>
+            <div class="metrics-card"><strong>Codec</strong><div id="codecValue" class="small">sin datos</div></div>
+            <div class="metrics-card"><strong>Bitrate actual</strong><div id="bitrateValue" class="small">0 kbps</div></div>
+          </div>
+          <div class="metrics-grid">
+            <div class="metrics-card"><strong>Jitter</strong><div id="jitterValue" class="small">0 ms</div></div>
+            <div class="metrics-card"><strong>Pérdida</strong><div id="lossValue" class="small">0 %</div></div>
+            <div class="metrics-card"><strong>RTT</strong><div id="rttValue" class="small">0 ms</div></div>
+            <div class="metrics-card"><strong>DataChannel</strong><div id="dcValue" class="small">sin canal</div></div>
+          </div>
+          <div class="chart-box"><canvas id="bitrateChart"></canvas></div>
+          <div class="chart-box"><canvas id="jitterChart"></canvas></div>
+          <div class="chart-box"><canvas id="lossChart"></canvas></div>
+          <div class="chart-box"><canvas id="rttChart"></canvas></div>
+          <div class="chart-box">
+            <h4>Resumen de oyentes</h4>
+            <div id="receiverSummary" class="small">Sin oyentes conectados.</div>
+            <table>
+              <thead><tr><th>Oyente</th><th>Bitrate</th><th>Jitter</th><th>Pérdida</th><th>RTT</th><th>Calidad</th></tr></thead>
+              <tbody id="receiversTableBody"></tbody>
+            </table>
+          </div>
+          <div class="chart-box">
+            <label class="hint" for="receiverSelect">Ver gráficas de:</label>
+            <select id="receiverSelect"></select>
+            <canvas id="receiverChart"></canvas>
+          </div>
+          <div class="chart-box"><canvas id="comparisonChart"></canvas></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // =====================================================
+    // LABORATORIO MULTIMEDIA MEYNARTC
+    // =====================================================
+    // El emisor autentica, selecciona un modo y transmite por WebRTC.
+    // El canal multimedia transporta audio/video como MediaStream y los archivos como datos binarios por DataChannel.
+
+    const landingView = document.getElementById('landingView');
+    const loginView = document.getElementById('loginView');
+    const transmitterView = document.getElementById('transmitterView');
+    const transmitBtn = document.getElementById('transmitBtn');
+    const listenBtn = document.getElementById('listenBtn');
+    const backToLanding = document.getElementById('backToLanding');
+    const backFromTransmit = document.getElementById('backFromTransmit');
+    const loginForm = document.getElementById('loginForm');
+    const loginError = document.getElementById('loginError');
+    const captchaBox = document.getElementById('captchaBox');
+    const usernameInput = document.getElementById('username');
+    const passwordInput = document.getElementById('password');
+    const captchaAnswerInput = document.getElementById('captchaAnswer');
+    const roomInput = document.getElementById('room');
+    const modeSelect = document.getElementById('modeSelect');
+    const startBtn = document.getElementById('startBtn');
+    const stopBtn = document.getElementById('stopBtn');
+    const status = document.getElementById('status');
+    const localVideo = document.getElementById('localVideo');
+    const fileInput = document.getElementById('fileInput');
+    const sendFileBtn = document.getElementById('sendFileBtn');
+    const fileStatus = document.getElementById('fileStatus');
+    const fileList = document.getElementById('fileList');
+    const toggleMetricsBtn = document.getElementById('toggleMetricsBtn');
+    const metricsPanel = document.getElementById('metricsPanel');
+    const iceState = document.getElementById('iceState');
+    const pcState = document.getElementById('pcState');
+    const codecValue = document.getElementById('codecValue');
+    const bitrateValue = document.getElementById('bitrateValue');
+    const jitterValue = document.getElementById('jitterValue');
+    const lossValue = document.getElementById('lossValue');
+    const rttValue = document.getElementById('rttValue');
+    const dcValue = document.getElementById('dcValue');
+    const receiverSummary = document.getElementById('receiverSummary');
+    const receiversTableBody = document.getElementById('receiversTableBody');
+    const receiverSelect = document.getElementById('receiverSelect');
+
+    let socket = null;
+    let localStream = null;
+    let room = '';
+    let captchaToken = '';
+    const peerConnections = new Map();
+    const activeDataChannels = new Map();
+    let statsTimer = null;
+    let currentMode = 'audio';
+    let broadcastActive = false;
+    let statsState = { last: new Map(), history: { bitrate: [], jitter: [], loss: [], rtt: [] }, charts: null };
+    const receiversStats = new Map();
+    let selectedReceiverId = '';
+    let receiverCharts = null;
+
+    function showLanding() {
+      landingView.style.display = 'block';
+      loginView.style.display = 'none';
+      transmitterView.style.display = 'none';
+    }
+
+    function showLogin() {
+      landingView.style.display = 'none';
+      loginView.style.display = 'block';
+      transmitterView.style.display = 'none';
+      loginError.textContent = '';
+      loadCaptcha();
+    }
+
+    function showTransmitterPanel() {
+      landingView.style.display = 'none';
+      loginView.style.display = 'none';
+      transmitterView.style.display = 'block';
+    }
+
+    async function loadCaptcha() {
+      try {
+        const response = await fetch('/captcha');
+        const data = await response.json();
+        captchaToken = data.token;
+        captchaBox.textContent = `Captcha: ${data.question}`;
+      } catch (error) {
+        captchaBox.textContent = 'No se pudo cargar el captcha.';
+      }
+    }
+
+    transmitBtn.addEventListener('click', showLogin);
+    listenBtn.addEventListener('click', () => { window.location.href = '/oyente.html'; });
+    backToLanding.addEventListener('click', showLanding);
+    backFromTransmit.addEventListener('click', () => { stopBroadcast(); showLanding(); });
+
+    loginForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const response = await fetch('/login-transmitter', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username: usernameInput.value.trim(),
+          password: passwordInput.value.trim(),
+          captchaToken,
+          captchaAnswer: captchaAnswerInput.value.trim()
+        })
+      });
+      const result = await response.json();
+      if (result.success) {
+        loginError.textContent = '';
+        showTransmitterPanel();
+        status.textContent = 'Acceso concedido. Puedes iniciar la transmisión.';
+      } else {
+        loginError.textContent = result.message;
+        loadCaptcha();
+      }
+    });
+
+    function buildSocketUrl() {
+      const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+      return `${protocol}://${window.location.host}/ws/${room}/emisor`;
+    }
+
+    function sendSignal(type, payload = {}, clientId = null) {
+      if (!socket || socket.readyState !== WebSocket.OPEN) return;
+      socket.send(JSON.stringify({ type, sender: 'emisor', room, payload, clientId }));
+    }
+
+    function updateStatus(message) {
+      status.textContent = message;
+    }
+
+    function stopTracks(stream) {
+      stream?.getTracks().forEach(track => track.stop());
+    }
+
+    function describeMode(mode) {
+      if (mode === 'audio') return 'audio activo';
+      if (mode === 'video') return 'cámara activa';
+      return 'pantalla compartida activa';
+    }
+
+    async function startMedia(mode = modeSelect.value) {
+      currentMode = mode;
+      if (localStream) {
+        stopTracks(localStream);
+        localStream = null;
+      }
+      if (mode === 'audio') {
+        updateStatus('Solicitando acceso al micrófono...');
+        localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      } else if (mode === 'video') {
+        updateStatus('Solicitando cámara y micrófono...');
+        localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+      } else {
+        updateStatus('Solicitando pantalla...');
+        localStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+      }
+      localVideo.srcObject = localStream;
+      localVideo.style.display = mode === 'audio' ? 'none' : 'block';
+      updateStatus(`Modo cambiado: ${describeMode(mode)}`);
+      return localStream;
+    }
+
+    function setupDataChannel(channel, clientId, role) {
+      channel.binaryType = 'arraybuffer';
+      channel.onopen = () => {
+        dcValue.textContent = 'abierto';
+        if (role === 'emisor') {
+          updateStatus('Canal de datos listo para enviar archivos');
+        } else {
+          updateStatus('Canal de datos listo para recibir archivos');
+        }
+      };
+      channel.onclose = () => {
+        dcValue.textContent = 'cerrado';
+      };
+      channel.onerror = () => {
+        updateStatus('Error en el canal DataChannel');
+      };
+      channel.onmessage = (event) => {
+        if (typeof event.data === 'string') {
+          const message = JSON.parse(event.data);
+          if (message.type === 'meta') {
+            const incoming = { name: message.name, size: message.size, chunks: [], received: 0, mime: message.mime || 'application/octet-stream' };
+            channel.__pendingFile = incoming;
+            fileStatus.textContent = `Recibiendo ${message.name}...`;
+            updateStatus('Archivo recibido');
+          } else if (message.type === 'done') {
+            const pending = channel.__pendingFile;
+            if (pending) {
+              const blob = new Blob(pending.chunks, { type: pending.mime });
+              const url = URL.createObjectURL(blob);
+              const item = document.createElement('div');
+              item.className = 'file-item';
+              item.innerHTML = `<strong>${pending.name}</strong><br><a href="${url}" target="_blank" download="${pending.name}">Descargar</a>`;
+              if (pending.mime.startsWith('image/')) {
+                const preview = document.createElement('img');
+                preview.src = url;
+                preview.style.maxWidth = '100%';
+                preview.style.borderRadius = '10px';
+                preview.style.marginTop = '8px';
+                item.appendChild(preview);
+              } else if (pending.mime.startsWith('audio/')) {
+                item.innerHTML += `<br><audio controls src="${url}" style="width:100%;margin-top:8px"></audio>`;
+              } else if (pending.mime.startsWith('video/')) {
+                item.innerHTML += `<br><video controls src="${url}" style="width:100%;margin-top:8px"></video>`;
+              }
+              fileList.prepend(item);
+              fileStatus.textContent = `Archivo recibido: ${pending.name}`;
+              updateStatus('Archivo recibido');
+            }
+          }
+        } else {
+          const pending = channel.__pendingFile;
+          if (pending) {
+            pending.chunks.push(event.data);
+            pending.received += event.data.byteLength;
+            if (pending.received >= pending.size) {
+              channel.send(JSON.stringify({ type: 'done' }));
+            }
+          }
+        }
+      };
+    }
+
+    function createDataChannel(pc, clientId) {
+      const channel = pc.createDataChannel('file-transfer');
+      setupDataChannel(channel, clientId, 'emisor');
+      activeDataChannels.set(clientId, channel);
+      return channel;
+    }
+
+    async function sendFileToListeners() {
+      const file = fileInput.files[0];
+      if (!file) {
+        fileStatus.textContent = 'Selecciona un archivo primero.';
+        return;
+      }
+      if (file.size > 10 * 1024 * 1024) {
+        fileStatus.textContent = 'El archivo supera 10 MB.';
+        return;
+      }
+      const channels = Array.from(activeDataChannels.values()).filter(channel => channel.readyState === 'open');
+      if (!channels.length) {
+        fileStatus.textContent = 'El canal de datos aún no está abierto.';
+        return;
+      }
+      const arrayBuffer = await file.arrayBuffer();
+      const chunkSize = 16 * 1024;
+      const meta = { type: 'meta', name: file.name, typeName: file.type, size: file.size, mime: file.type || 'application/octet-stream' };
+      channels.forEach(channel => channel.send(JSON.stringify(meta)));
+      for (let offset = 0; offset < arrayBuffer.byteLength; offset += chunkSize) {
+        const chunk = arrayBuffer.slice(offset, offset + chunkSize);
+        channels.forEach(channel => channel.send(chunk));
+      }
+      fileStatus.textContent = `Archivo enviado: ${file.name}`;
+      updateStatus('Archivo enviado');
+    }
+
+    async function renegotiatePeerConnection(clientId, pc) {
+      if (!pc || pc.signalingState !== 'stable') return;
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      sendSignal('offer', { type: offer.type, sdp: offer.sdp }, clientId);
+    }
+
+    async function switchMode(nextMode) {
+      if (!broadcastActive || !localStream) return;
+      const stream = await startMedia(nextMode);
+      const tracksByKind = {
+        audio: stream.getAudioTracks()[0] || null,
+        video: stream.getVideoTracks()[0] || null
+      };
+      for (const [clientId, pc] of peerConnections.entries()) {
+        const audioSender = pc.getSenders().find(sender => sender.track?.kind === 'audio');
+        const videoSender = pc.getSenders().find(sender => sender.track?.kind === 'video');
+        if (tracksByKind.audio) {
+          if (audioSender) await audioSender.replaceTrack(tracksByKind.audio);
+          else pc.addTrack(tracksByKind.audio, stream);
+        } else if (audioSender) {
+          await audioSender.replaceTrack(null);
+        }
+        if (tracksByKind.video) {
+          if (videoSender) await videoSender.replaceTrack(tracksByKind.video);
+          else pc.addTrack(tracksByKind.video, stream);
+        } else if (videoSender) {
+          await videoSender.replaceTrack(null);
+        }
+        await renegotiatePeerConnection(clientId, pc);
+      }
+      updateStatus(`Modo cambiado: ${describeMode(nextMode)}`);
+    }
+
+    async function createPeerConnectionForListener(clientId) {
+      if (peerConnections.has(clientId)) return;
+      const pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+      localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+      createDataChannel(pc, clientId);
+      pc.onicecandidate = (event) => {
+        if (event.candidate) {
+          sendSignal('candidate', event.candidate.toJSON(), clientId);
+        }
+      };
+      pc.onconnectionstatechange = () => {
+        pcState.textContent = pc.connectionState;
+        if (pc.connectionState === 'connected') {
+          updateStatus('Conectado');
+        }
+      };
+      pc.oniceconnectionstatechange = () => {
+        iceState.textContent = pc.iceConnectionState;
+      };
+      pc.ondatachannel = (event) => {
+        setupDataChannel(event.channel, clientId, 'oyente');
+        activeDataChannels.set(clientId, event.channel);
+      };
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      sendSignal('offer', { type: offer.type, sdp: offer.sdp }, clientId);
+      peerConnections.set(clientId, pc);
+      startStatsMonitor(pc);
+    }
+
+    function connectSignalServer() {
+      socket = new WebSocket(buildSocketUrl());
+      socket.onopen = () => {
+        updateStatus('Conectado al servidor de señalización');
+        sendSignal('join');
+      };
+      socket.onmessage = async (event) => {
+        const message = JSON.parse(event.data);
+        if (message.type === 'listener-joined') {
+          await createPeerConnectionForListener(message.clientId);
+          return;
+        }
+        if (message.type === 'answer') {
+          const pc = peerConnections.get(message.clientId);
+          if (pc) {
+            await pc.setRemoteDescription(new RTCSessionDescription(message.payload));
+          }
+          return;
+        }
+        if (message.type === 'candidate') {
+          const pc = peerConnections.get(message.clientId);
+          if (pc && message.payload) {
+            await pc.addIceCandidate(new RTCIceCandidate(message.payload));
+          }
+          return;
+        }
+        if (message.type === 'receiver-stats') {
+          const receiverId = message.payload.receiverId || message.clientId || `oyente-${Date.now()}`;
+          const receiverName = message.payload.receiverName || `Oyente ${String(receiverId).slice(-4)}`;
+          const receiverEntry = receiversStats.get(receiverId) || { receiverName, history: { bitrateKbps: [], jitterMs: [], packetLossPercent: [], rttMs: [] }, lastStats: null, lastSeen: Date.now() };
+          receiverEntry.receiverName = receiverName;
+          receiverEntry.lastStats = {
+            bitrateKbps: Number(message.payload.bitrateKbps || 0),
+            jitterMs: Number(message.payload.jitterMs || 0),
+            packetLossPercent: Number(message.payload.packetLossPercent || 0),
+            rttMs: Number(message.payload.rttMs || 0),
+            timestamp: Number(message.payload.timestamp || Date.now())
+          };
+          receiverEntry.lastSeen = Date.now();
+          receiverEntry.history.bitrateKbps.push(receiverEntry.lastStats.bitrateKbps);
+          receiverEntry.history.jitterMs.push(receiverEntry.lastStats.jitterMs);
+          receiverEntry.history.packetLossPercent.push(receiverEntry.lastStats.packetLossPercent);
+          receiverEntry.history.rttMs.push(receiverEntry.lastStats.rttMs);
+          if (receiverEntry.history.bitrateKbps.length > 30) {
+            receiverEntry.history.bitrateKbps.shift();
+            receiverEntry.history.jitterMs.shift();
+            receiverEntry.history.packetLossPercent.shift();
+            receiverEntry.history.rttMs.shift();
+          }
+          receiversStats.set(receiverId, receiverEntry);
+          if (!selectedReceiverId || !receiversStats.has(selectedReceiverId)) {
+            selectedReceiverId = receiverId;
+          }
+          renderReceiverDashboard();
+          return;
+        }
+        if (message.type === 'receiver-left') {
+          const receiverId = message.payload.receiverId || message.clientId;
+          if (receiverId) {
+            receiversStats.delete(receiverId);
+            if (selectedReceiverId === receiverId) {
+              selectedReceiverId = receiversStats.keys().next().value || '';
+            }
+            renderReceiverDashboard();
+          }
+        }
+      };
+      socket.onerror = () => {
+        updateStatus('Error en la conexión WebSocket');
+      };
+    }
+
+    async function startBroadcast() {
+      room = roomInput.value.trim() || 'demo';
+      startBtn.disabled = true;
+      try {
+        broadcastActive = true;
+        await startMedia();
+        connectSignalServer();
+      } catch (error) {
+        broadcastActive = false;
+        updateStatus('No se pudo iniciar la transmisión: ' + error.message);
+        startBtn.disabled = false;
+      }
+    }
+
+    function stopBroadcast() {
+      broadcastActive = false;
+      if (socket) {
+        sendSignal('leave');
+        socket.close();
+        socket = null;
+      }
+      peerConnections.forEach(pc => pc.close());
+      peerConnections.clear();
+      activeDataChannels.clear();
+      receiversStats.clear();
+      selectedReceiverId = '';
+      renderReceiverDashboard();
+      if (localStream) {
+        stopTracks(localStream);
+        localStream = null;
+      }
+      if (localVideo.srcObject) {
+        localVideo.srcObject = null;
+      }
+      if (statsTimer) clearInterval(statsTimer);
+      statsTimer = null;
+      startBtn.disabled = false;
+      updateStatus('Transmisión detenida');
+      pcState.textContent = 'sin conexión';
+      iceState.textContent = 'sin conexión';
+      dcValue.textContent = 'sin canal';
+    }
+
+    function createChart(canvasId, label) {
+      const ctx = document.getElementById(canvasId).getContext('2d');
+      return new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: [],
+          datasets: [{ label, data: [], borderColor: '#5ee7d4', backgroundColor: 'rgba(94,231,212,0.2)', fill: true, tension: 0.2 }]
+        },
+        options: { responsive: true, animation: false, scales: { y: { beginAtZero: true } } }
+      });
+    }
+
+    function initCharts() {
+      if (!statsState.charts) {
+        statsState.charts = {
+          bitrate: createChart('bitrateChart', 'Bitrate kbps'),
+          jitter: createChart('jitterChart', 'Jitter ms'),
+          loss: createChart('lossChart', 'Pérdida %'),
+          rtt: createChart('rttChart', 'RTT ms')
+        };
+      }
+    }
+
+    function updateCharts() {
+      initCharts();
+      const maxPoints = 30;
+      const pushSeries = (series, value) => {
+        series.push(value);
+        if (series.length > maxPoints) series.shift();
+      };
+      pushSeries(statsState.history.bitrate, parseFloat(bitrateValue.textContent.replace(' kbps', '')) || 0);
+      pushSeries(statsState.history.jitter, parseFloat(jitterValue.textContent.replace(' ms', '')) || 0);
+      pushSeries(statsState.history.loss, parseFloat(lossValue.textContent.replace(' %', '')) || 0);
+      pushSeries(statsState.history.rtt, parseFloat(rttValue.textContent.replace(' ms', '')) || 0);
+      const labels = Array.from({ length: statsState.history.bitrate.length }, (_, i) => i + 1);
+      statsState.charts.bitrate.data.labels = labels;
+      statsState.charts.bitrate.data.datasets[0].data = statsState.history.bitrate;
+      statsState.charts.bitrate.update();
+      statsState.charts.jitter.data.labels = labels;
+      statsState.charts.jitter.data.datasets[0].data = statsState.history.jitter;
+      statsState.charts.jitter.update();
+      statsState.charts.loss.data.labels = labels;
+      statsState.charts.loss.data.datasets[0].data = statsState.history.loss;
+      statsState.charts.loss.update();
+      statsState.charts.rtt.data.labels = labels;
+      statsState.charts.rtt.data.datasets[0].data = statsState.history.rtt;
+      statsState.charts.rtt.update();
+      renderReceiverDashboard();
+    }
+
+    function estimateQuality(packetLoss, jitter) {
+      if (packetLoss < 1 && jitter < 10) return 'Excelente';
+      if (packetLoss < 3 && jitter < 30) return 'Buena';
+      if (packetLoss < 8 && jitter < 60) return 'Regular';
+      return 'Deficiente';
+    }
+
+    function initReceiverCharts() {
+      if (!receiverCharts) {
+        receiverCharts = {
+          selected: new Chart(document.getElementById('receiverChart').getContext('2d'), {
+            type: 'line',
+            data: { labels: [], datasets: [
+              { label: 'Bitrate kbps', data: [], borderColor: '#5ee7d4', backgroundColor: 'rgba(94,231,212,0.15)', fill: true, tension: 0.2 },
+              { label: 'Jitter ms', data: [], borderColor: '#4f9cff', backgroundColor: 'rgba(79,156,255,0.15)', fill: true, tension: 0.2 },
+              { label: 'Pérdida %', data: [], borderColor: '#ffb84d', backgroundColor: 'rgba(255,184,77,0.15)', fill: true, tension: 0.2 },
+              { label: 'RTT ms', data: [], borderColor: '#ff6b6b', backgroundColor: 'rgba(255,107,107,0.15)', fill: true, tension: 0.2 }
+            ]},
+            options: { responsive: true, animation: false, scales: { y: { beginAtZero: true } } }
+          }),
+          comparison: new Chart(document.getElementById('comparisonChart').getContext('2d'), {
+            type: 'line',
+            data: { labels: [], datasets: [
+              { label: 'Bitrate emisor', data: [], borderColor: '#5ee7d4', backgroundColor: 'rgba(94,231,212,0.15)', fill: true, tension: 0.2 },
+              { label: 'Promedio oyentes', data: [], borderColor: '#4f9cff', backgroundColor: 'rgba(79,156,255,0.15)', fill: true, tension: 0.2 }
+            ]},
+            options: { responsive: true, animation: false, scales: { y: { beginAtZero: true } } }
+          })
+        };
+      }
+    }
+
+    function renderReceiverDashboard() {
+      initReceiverCharts();
+      const entries = Array.from(receiversStats.entries());
+      receiverSummary.textContent = entries.length
+        ? `Conectados: ${entries.length} · Bitrate promedio: ${Math.round(entries.reduce((acc, [, item]) => acc + (item.lastStats?.bitrateKbps || 0), 0) / Math.max(1, entries.length))} kbps · Jitter promedio: ${Math.round(entries.reduce((acc, [, item]) => acc + (item.lastStats?.jitterMs || 0), 0) / Math.max(1, entries.length))} ms · Pérdida promedio: ${Math.round(entries.reduce((acc, [, item]) => acc + (item.lastStats?.packetLossPercent || 0), 0) / Math.max(1, entries.length))} %`
+        : 'Sin oyentes conectados.';
+      const worst = entries.length ? entries.reduce((best, current) => {
+        const currentLoss = current[1].lastStats?.packetLossPercent || 0;
+        const bestLoss = best[1].lastStats?.packetLossPercent || 0;
+        return currentLoss > bestLoss ? current : best;
+      }) : null;
+      if (worst) {
+        receiverSummary.textContent += ` · Peor calidad: ${worst[1].receiverName}`;
+      }
+      receiversTableBody.innerHTML = '';
+      if (!entries.length) {
+        receiversTableBody.innerHTML = '<tr><td colspan="6" class="small">Sin métricas aún.</td></tr>';
+      } else {
+        entries.forEach(([receiverId, item]) => {
+          const stats = item.lastStats || {};
+          const row = document.createElement('tr');
+          row.innerHTML = `<td>${item.receiverName}</td><td>${Math.round(stats.bitrateKbps || 0)} kbps</td><td>${(stats.jitterMs || 0).toFixed(1)} ms</td><td>${(stats.packetLossPercent || 0).toFixed(1)} %</td><td>${(stats.rttMs || 0).toFixed(1)} ms</td><td>${estimateQuality(stats.packetLossPercent || 0, stats.jitterMs || 0)}</td>`;
+          receiversTableBody.appendChild(row);
+        });
+      }
+      receiverSelect.innerHTML = '';
+      entries.forEach(([receiverId, item]) => {
+        const option = document.createElement('option');
+        option.value = receiverId;
+        option.textContent = item.receiverName;
+        receiverSelect.appendChild(option);
+      });
+      if (!selectedReceiverId && entries.length) {
+        selectedReceiverId = entries[0][0];
+      }
+      receiverSelect.value = selectedReceiverId || '';
+      receiverSelect.onchange = () => {
+        selectedReceiverId = receiverSelect.value;
+        renderReceiverDashboard();
+      };
+      if (!selectedReceiverId) {
+        receiverCharts.selected.data.labels = [];
+        receiverCharts.selected.data.datasets.forEach(dataset => dataset.data = []);
+        receiverCharts.selected.update();
+        receiverCharts.comparison.data.labels = [];
+        receiverCharts.comparison.data.datasets.forEach(dataset => dataset.data = []);
+        receiverCharts.comparison.update();
+        return;
+      }
+      const selectedEntry = receiversStats.get(selectedReceiverId);
+      if (!selectedEntry) return;
+      const maxPoints = 30;
+      const labels = Array.from({ length: Math.max(1, selectedEntry.history.bitrateKbps.length) }, (_, i) => i + 1);
+      receiverCharts.selected.data.labels = labels;
+      receiverCharts.selected.data.datasets[0].data = selectedEntry.history.bitrateKbps.slice(-maxPoints);
+      receiverCharts.selected.data.datasets[1].data = selectedEntry.history.jitterMs.slice(-maxPoints);
+      receiverCharts.selected.data.datasets[2].data = selectedEntry.history.packetLossPercent.slice(-maxPoints);
+      receiverCharts.selected.data.datasets[3].data = selectedEntry.history.rttMs.slice(-maxPoints);
+      receiverCharts.selected.update();
+      const avgReceiverBitrate = entries.length ? entries.map(([, item]) => item.history.bitrateKbps[item.history.bitrateKbps.length - 1] || 0).reduce((acc, value) => acc + value, 0) / entries.length : 0;
+      const comparisonLabels = Array.from({ length: Math.max(statsState.history.bitrate.length, 1) }, (_, i) => i + 1);
+      receiverCharts.comparison.data.labels = comparisonLabels;
+      receiverCharts.comparison.data.datasets[0].data = statsState.history.bitrate.slice(-maxPoints);
+      receiverCharts.comparison.data.datasets[1].data = Array.from({ length: Math.max(statsState.history.bitrate.length, 1) }, (_, index) => {
+        const values = Array.from(receiversStats.values()).map(item => item.history.bitrateKbps[index] || 0);
+        return values.length ? values.reduce((acc, value) => acc + value, 0) / values.length : 0;
+      }).slice(-maxPoints);
+      receiverCharts.comparison.update();
+    }
+
+    function startStatsMonitor(peerConnection) {
+      if (statsTimer) clearInterval(statsTimer);
+      statsTimer = setInterval(async () => {
+        if (!peerConnection || peerConnection.connectionState === 'closed') return;
+        const stats = await peerConnection.getStats();
+        let bitrate = 0;
+        let jitter = 0;
+        let packetLoss = 0;
+        let rtt = 0;
+        let codec = 'sin datos';
+        let bytesSent = 0;
+        let bytesReceived = 0;
+        let packetsSent = 0;
+        let packetsReceived = 0;
+        let dataChannelMessagesSent = 0;
+        let dataChannelMessagesReceived = 0;
+        let fps = 0;
+        let framesDropped = 0;
+        let resolution = 'sin datos';
+
+        stats.forEach(report => {
+          if (report.type === 'outbound-rtp' || report.type === 'inbound-rtp') {
+            if (report.type === 'outbound-rtp') {
+              bytesSent = report.bytesSent || 0;
+              packetsSent = report.packetsSent || 0;
+              if (report.framesPerSecond) fps = report.framesPerSecond;
+              if (report.framesDropped) framesDropped = report.framesDropped;
+              if (report.width && report.height) resolution = `${report.width}x${report.height}`;
+            } else {
+              bytesReceived = report.bytesReceived || 0;
+              packetsReceived = report.packetsReceived || 0;
+              jitter = report.jitter ? report.jitter * 1000 : 0;
+              packetLoss = (report.packetsLost && (report.packetsLost + report.packetsReceived) > 0)
+                ? (report.packetsLost / (report.packetsLost + report.packetsReceived)) * 100
+                : 0;
+            }
+          }
+          if (report.type === 'codec') {
+            codec = report.mimeType || codec;
+          }
+          if (report.type === 'candidate-pair' && report.currentRoundTripTime) {
+            rtt = report.currentRoundTripTime * 1000;
+          }
+          if (report.type === 'data-channel') {
+            dataChannelMessagesSent = report.messagesSent || 0;
+            dataChannelMessagesReceived = report.messagesReceived || 0;
+          }
+        });
+
+        const last = statsState.last.get(peerConnection.id || 'default') || { bytesSent: 0, bytesReceived: 0, timestamp: performance.now() };
+        const deltaMs = Math.max(performance.now() - last.timestamp, 1);
+        const deltaSent = Math.max(bytesSent - last.bytesSent, 0);
+        const deltaReceived = Math.max(bytesReceived - last.bytesReceived, 0);
+        bitrate = Math.round(((deltaSent + deltaReceived) * 8) / (deltaMs / 1000) / 1024);
+        statsState.last.set(peerConnection.id || 'default', { bytesSent, bytesReceived, timestamp: performance.now() });
+
+        codecValue.textContent = codec;
+        bitrateValue.textContent = `${bitrate} kbps`;
+        jitterValue.textContent = `${jitter.toFixed(1)} ms`;
+        lossValue.textContent = `${packetLoss.toFixed(1)} %`;
+        rttValue.textContent = `${rtt.toFixed(1)} ms`;
+        dcValue.textContent = `${dataChannelMessagesSent} env / ${dataChannelMessagesReceived} rec`;
+        if (currentMode === 'video' || currentMode === 'screen') {
+          codecValue.textContent = `${codec} · ${resolution} · ${fps} fps · dropped ${framesDropped}`;
+        }
+        updateCharts();
+      }, 1000);
+    }
+
+    modeSelect.addEventListener('change', async () => {
+      if (!broadcastActive) return;
+      try {
+        await switchMode(modeSelect.value);
+      } catch (error) {
+        updateStatus('No se pudo cambiar de modo: ' + error.message);
+      }
+    });
+
+    toggleMetricsBtn.addEventListener('click', () => {
+      metricsPanel.style.display = metricsPanel.style.display === 'none' ? 'block' : 'none';
+    });
+
+    sendFileBtn.addEventListener('click', sendFileToListeners);
+    startBtn.addEventListener('click', startBroadcast);
+    stopBtn.addEventListener('click', stopBroadcast);
+  </script>
+</body>
+</html>
