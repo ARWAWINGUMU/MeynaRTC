@@ -4,6 +4,7 @@ plugins {
     kotlin("jvm") version "1.9.24"
     kotlin("plugin.serialization") version "1.9.24"
     application
+    id("com.github.johnrengelman.shadow") version "8.1.1"
 }
 
 group = "com.meynaradio"
@@ -34,4 +35,13 @@ tasks.withType<KotlinCompile>().configureEach {
 tasks.withType<JavaCompile>().configureEach {
     sourceCompatibility = "17"
     targetCompatibility = "17"
+}
+
+tasks.named<com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar>("shadowJar") {
+    archiveBaseName.set("MeynaRadio")
+    archiveVersion.set("1.0.0")
+    archiveClassifier.set("")
+    manifest {
+        attributes("Main-Class" to "com.meynaradio.ApplicationKt")
+    }
 }
