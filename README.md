@@ -2,8 +2,8 @@
 
 Laboratorio multimedia de comunicaciones en tiempo real basado en WebRTC nativo, Kotlin + Ktor y WebSockets.
 
-## Qué cambia en esta versión
-- El proyecto ahora se presenta como MeynaRTC con el slogan oficial: "Comunica sin fronteras."
+## ¿Qué hay en el proyecto?
+- El proyecto se presenta como MeynaRTC con el slogan: "Comunica sin fronteras."
 - El emisor autenticado puede elegir entre tres modos de transmisión:
   - Solo audio
   - Cámara + audio
@@ -49,7 +49,7 @@ Laboratorio multimedia de comunicaciones en tiempo real basado en WebRTC nativo,
    - Contraseña: admin123
 3. El emisor selecciona un modo: audio, cámara o pantalla.
 4. Inicia la transmisión y luego puede enviar archivos pequeños (máx. 10 MB).
-5. El oyente entra a la misma sala y recibe el stream o los archivos.
+5. El oyente entra a la misma sala y recibe el stream o los archivos (por implementar).
 
 ## Métricas de múltiples oyentes
 - Cada oyente reporta cada segundo métricas de recepción al emisor por WebSocket.
@@ -61,12 +61,3 @@ Laboratorio multimedia de comunicaciones en tiempo real basado en WebRTC nativo,
 - Se recomienda HTTPS en producción.
 - Para producción se deben mover las credenciales a variables de entorno seguras.
 - Si la red es restrictiva, puede requerirse TURN.
-
-## Despliegue en Railway
-1. Sube el repositorio a GitHub.
-2. Crea un nuevo proyecto en Railway.
-3. Conecta el repositorio.
-4. Configura las variables de entorno:
-   - TRANSMITTER_USER
-   - TRANSMITTER_PASSWORD
-5. Genera el dominio público y prueba el laboratorio completo.
