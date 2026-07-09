@@ -41,7 +41,6 @@ data class SignalMessage(
     val sender: String,
     val room: String,
     val payload: JsonObject = JsonObject(emptyMap()),
-    val target: String? = null,
     val clientId: String? = null
 )
 
@@ -68,11 +67,13 @@ data class CaptchaChallenge(
 // Representa una conexión activa dentro de una sala.
 data class ClientConnection(val session: WebSocketSession, val role: String, val clientId: String? = null)
 
-// Cada sala guarda un emisor máximo y una lista de oyentes.
+// Cada sala guarda un único emisor y un mapa de oyentes indexado por clientId.
+// Usar un mapa (y no una lista) garantiza que el servidor siempre sepa exactamente
+// qué WebSocketSession pertenece a cada oyente, sin ambigüedades ni necesidad de
+// recorrer/adivinar destinatarios al reenviar señalización.
 data class RoomState(
     var broadcaster: ClientConnection? = null,
-    val listeners: MutableList<ClientConnection> = mutableListOf(),
-    var pendingOffer: SignalMessage? = null
+    val listeners: MutableMap<String, ClientConnection> = ConcurrentHashMap()
 )
 
 fun Application.module() {
@@ -182,21 +183,20 @@ fun Application.module() {
 
                     when (message.type) {
                         "join" -> {
-                            // Solo los oyentes se registran con un identificador propio.
+                            // Solo los oyentes se registran con un identificador propio (clientId).
                             if (role == "oyente") {
                                 val clientId = message.clientId ?: UUID.randomUUID().toString()
-                                val pendingOfferToSend: SignalMessage? = synchronized(roomState) {
-                                    roomState.listeners.removeAll { it.session == this }
-                                    roomState.listeners.add(ClientConnection(this, role, clientId))
-                                    roomState.pendingOffer?.copy(target = clientId)
+                                synchronized(roomState) {
+                                    // Registramos (o reemplazamos, en caso de reconexión) ÚNICAMENTE
+                                    // la entrada de ESTE clientId. Nunca se toca la de otro oyente.
+                                    roomState.listeners[clientId] = ClientConnection(this, role, clientId)
                                 }
 
-                                // Si ya existe un offer pendiente, se le envía al oyente recién conectado.
-                                pendingOfferToSend?.let { offerToClient ->
-                                    send(Frame.Text(json.encodeToString(SignalMessage.serializer(), offerToClient)))
-                                }
-
-                                // Avisamos al emisor que llegó un oyente nuevo para crear su PeerConnection.
+                                // Avisamos al emisor que llegó un oyente nuevo para que cree una
+                                // RTCPeerConnection dedicada y le envíe una oferta fresca.
+                                // No existe ningún "offer pendiente" que reenviar aquí: cada oyente
+                                // siempre negocia su propia sesión desde cero con el emisor, así que
+                                // nunca puede recibir el SDP destinado a otro oyente.
                                 val listenerJoinedMessage = SignalMessage(
                                     type = "listener-joined",
                                     sender = "servidor",
@@ -209,35 +209,43 @@ fun Application.module() {
                         }
 
                         "offer" -> {
-                            // El emisor manda un offer; el servidor lo guarda y lo envía solo al oyente indicado.
+                            // El emisor crea una oferta específica para un oyente (identificado por
+                            // clientId) y el servidor la reenvía EXCLUSIVAMENTE a ese oyente.
+                            // Si el oyente ya no está en el mapa (se desconectó justo antes), el
+                            // mensaje simplemente se descarta: nunca se hace broadcast de un offer,
+                            // porque su SDP solo es válido para el destinatario original.
                             if (role == "emisor") {
-                                roomState.pendingOffer = message
                                 val targetClientId = message.clientId
-                                val targetListener = synchronized(roomState) {
-                                    if (targetClientId != null) {
-                                        roomState.listeners.firstOrNull { it.clientId == targetClientId }
-                                    } else {
-                                        null
-                                    }
+                                val targetListener = targetClientId?.let {
+                                    synchronized(roomState) { roomState.listeners[it] }
                                 }
-                                if (targetListener != null) {
-                                    targetListener.session.send(Frame.Text(json.encodeToString(SignalMessage.serializer(), message)))
-                                } else {
-                                    val listenersSnapshot = synchronized(roomState) {
-                                        roomState.listeners.toList()
-                                    }
-                                    listenersSnapshot.forEach { listener ->
-                                        listener.session.send(Frame.Text(json.encodeToString(SignalMessage.serializer(), message)))
-                                    }
-                                }
+                                targetListener?.session?.send(Frame.Text(json.encodeToString(SignalMessage.serializer(), message)))
                             }
                         }
 
-                        "answer", "candidate" -> {
-                            // Los oyentes envían respuestas y candidatos al emisor.
+                        "answer" -> {
+                            // El oyente responde a SU oferta; se reenvía al emisor con su clientId
+                            // intacto para que este aplique la respuesta a la PeerConnection correcta.
                             if (role == "oyente") {
-                                val forwardedMessage = message.copy(clientId = message.clientId ?: "")
-                                roomState.broadcaster?.session?.send(Frame.Text(json.encodeToString(SignalMessage.serializer(), forwardedMessage)))
+                                roomState.broadcaster?.session?.send(Frame.Text(json.encodeToString(SignalMessage.serializer(), message)))
+                            }
+                        }
+
+                        "candidate" -> {
+                            if (role == "oyente") {
+                                // ICE candidate del oyente -> se reenvía al emisor, que lo asocia a
+                                // la PeerConnection correspondiente mediante el clientId del mensaje.
+                                roomState.broadcaster?.session?.send(Frame.Text(json.encodeToString(SignalMessage.serializer(), message)))
+                            } else if (role == "emisor") {
+                                // ICE candidate del emisor -> se reenvía SOLO al oyente indicado por
+                                // clientId. Sin este reenvío la negociación ICE de ese oyente nunca
+                                // se completa fuera de la red local (falta STUN/TURN trickle), que es
+                                // justo lo que fallaba tras el despliegue.
+                                val targetClientId = message.clientId
+                                val targetListener = targetClientId?.let {
+                                    synchronized(roomState) { roomState.listeners[it] }
+                                }
+                                targetListener?.session?.send(Frame.Text(json.encodeToString(SignalMessage.serializer(), message)))
                             }
                         }
 
@@ -265,39 +273,44 @@ fun Application.module() {
                     }
                 }
             } finally {
-                // Al cerrar la conexión, se elimina al cliente de la sala.
-                var removedClientIdToNotify: String? = null
-                val broadcasterSessionToNotify: WebSocketSession? = synchronized(roomState) {
+                // Al cerrar la conexión, se elimina al cliente de la sala y, si era un
+                // oyente el que se fue sin avisar (cierre abrupto de pestaña/red), se
+                // notifica al emisor para que cierre SOLO esa PeerConnection.
+                // (El bloque synchronized devuelve el par emisor+clientId a notificar;
+                // antes se descartaba con un "null" final y la notificación nunca salía.)
+                val notification: Pair<WebSocketSession, String>? = synchronized(roomState) {
+                    var pending: Pair<WebSocketSession, String>? = null
                     if (role == "emisor") {
                         if (roomState.broadcaster?.session == this) {
                             roomState.broadcaster = null
                         }
                     } else {
-                        val removedClientId = roomState.listeners.firstOrNull { it.session == this }?.clientId
-                        roomState.listeners.removeAll { it.session == this }
-                        if (!notifiedLeave && removedClientId != null && roomState.broadcaster != null) {
-                            removedClientIdToNotify = removedClientId
-                            roomState.broadcaster?.session
-                        } else {
-                            null
+                        val removedClientId = roomState.listeners.entries.firstOrNull { it.value.session == this }?.key
+                        if (removedClientId != null) {
+                            roomState.listeners.remove(removedClientId)
+                            val broadcasterSession = roomState.broadcaster?.session
+                            if (!notifiedLeave && broadcasterSession != null) {
+                                pending = broadcasterSession to removedClientId
+                            }
                         }
                     }
 
                     if (roomState.broadcaster == null && roomState.listeners.isEmpty()) {
                         rooms.remove(room)
                     }
-                    null
+                    pending
                 }
 
-                if (!notifiedLeave && broadcasterSessionToNotify != null && removedClientIdToNotify != null) {
+                if (notification != null) {
+                    val (broadcasterSession, removedClientId) = notification
                     val leftMessage = SignalMessage(
                         type = "receiver-left",
                         sender = "servidor",
                         room = room,
-                        payload = JsonObject(mapOf("receiverId" to JsonPrimitive(removedClientIdToNotify!!))),
-                        clientId = removedClientIdToNotify
+                        payload = JsonObject(mapOf("receiverId" to JsonPrimitive(removedClientId))),
+                        clientId = removedClientId
                     )
-                    broadcasterSessionToNotify.send(Frame.Text(json.encodeToString(SignalMessage.serializer(), leftMessage)))
+                    broadcasterSession.send(Frame.Text(json.encodeToString(SignalMessage.serializer(), leftMessage)))
                 }
             }
         }

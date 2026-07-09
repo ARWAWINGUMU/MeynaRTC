@@ -529,6 +529,14 @@
         if (message.type === 'receiver-left') {
           const receiverId = message.payload.receiverId || message.clientId;
           if (receiverId) {
+            // Cerramos y eliminamos ÚNICAMENTE la PeerConnection de este oyente.
+            // Las conexiones de los demás oyentes no se tocan en absoluto.
+            const pc = peerConnections.get(receiverId);
+            if (pc) {
+              pc.close();
+              peerConnections.delete(receiverId);
+            }
+            activeDataChannels.delete(receiverId);
             receiversStats.delete(receiverId);
             if (selectedReceiverId === receiverId) {
               selectedReceiverId = receiversStats.keys().next().value || '';

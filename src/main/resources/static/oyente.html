@@ -182,6 +182,10 @@
       };
       socket.onmessage = async (event) => {
         const message = JSON.parse(event.data);
+        // Seguridad adicional: el servidor ya enruta cada mensaje solo a su
+        // clientId correspondiente, pero verificamos igualmente para nunca
+        // procesar una señal (offer/candidate) que no sea la nuestra.
+        if (message.clientId && message.clientId !== clientId) return;
         if (message.type === 'offer') {
           await handleOffer(message.payload);
           return;
