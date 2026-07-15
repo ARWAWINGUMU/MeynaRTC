@@ -54,6 +54,11 @@
     table { width: 100%; border-collapse: collapse; margin-top: 8px; }
     th, td { text-align: left; padding: 8px; border-bottom: 1px solid var(--border); font-size: 0.95rem; }
     @media (max-width: 900px) { .grid-2, .metrics-grid, .row { grid-template-columns: 1fr; } }
+    /* Laboratorio DSP: pestañas y canvases de visualización. */
+    .dsp-tabs { display: grid; gap: 8px; grid-template-columns: repeat(4, minmax(0, 1fr)); margin-top: 12px; }
+    .dsp-tab-btn.active { background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #07111f; }
+    .dsp-tab-content canvas { width: 100%; height: auto; max-width: 100%; background: #02070d; border-radius: 10px; border: 1px solid var(--border); }
+    @media (max-width: 900px) { .dsp-tabs { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
   </style>
 </head>
 <body>
@@ -143,10 +148,56 @@
           </div>
           <div class="chart-box"><canvas id="comparisonChart"></canvas></div>
         </div>
+        <button class="secondary" id="toggleDspBtn">Laboratorio DSP</button>
+        <div id="dspPanel" style="display: none; margin-top: 12px;">
+          <h3>Laboratorio DSP — Procesamiento Digital de Señales</h3>
+          <p class="hint">Analiza en tiempo real la misma señal de audio que se está transmitiendo por WebRTC (funciona en paralelo, no la reemplaza).</p>
+          <div id="dspStatus" class="status small">Esperando transmisión activa…</div>
+          <div class="dsp-tabs">
+            <button class="secondary dsp-tab-btn active" data-target="dspTabOsciloscopio">Osciloscopio</button>
+            <button class="secondary dsp-tab-btn" data-target="dspTabFft">FFT</button>
+            <button class="secondary dsp-tab-btn" data-target="dspTabEspectrograma">Espectrograma</button>
+            <button class="secondary dsp-tab-btn" data-target="dspTabEstadisticas">Estadísticas</button>
+          </div>
+
+          <div id="dspTabOsciloscopio" class="dsp-tab-content chart-box">
+            <h4>Osciloscopio — dominio del tiempo</h4>
+            <p class="small">Amplitud instantánea x[n] capturada del micrófono, dibujada en vivo.</p>
+            <canvas id="dspOscilloscopeCanvas" width="800" height="220"></canvas>
+          </div>
+
+          <div id="dspTabFft" class="dsp-tab-content chart-box" style="display: none;">
+            <h4>FFT — dominio de la frecuencia</h4>
+            <p class="small">Espectro de magnitud calculado con una FFT real (Cooley-Tukey radix-2) sobre bloques de 2048 muestras. Eje X: frecuencia (Hz). Eje Y: magnitud (dB).</p>
+            <canvas id="dspFftCanvas" width="800" height="220"></canvas>
+          </div>
+
+          <div id="dspTabEspectrograma" class="dsp-tab-content chart-box" style="display: none;">
+            <h4>Espectrograma</h4>
+            <p class="small">Tiempo (eje horizontal, se desplaza hacia la izquierda) vs. frecuencia (eje vertical); el color representa la intensidad en dB.</p>
+            <canvas id="dspSpectrogramCanvas" width="800" height="240"></canvas>
+          </div>
+
+          <div id="dspTabEstadisticas" class="dsp-tab-content" style="display: none;">
+            <h4>Estadísticas de la señal</h4>
+            <div class="metrics-grid">
+              <div class="metrics-card"><strong>Energía instantánea</strong><div id="dspEnergyValue" class="small">0</div></div>
+              <div class="metrics-card"><strong>Potencia promedio</strong><div id="dspPowerValue" class="small">0</div></div>
+              <div class="metrics-card"><strong>Nivel RMS</strong><div id="dspRmsValue" class="small">0</div></div>
+            </div>
+            <div class="chart-box"><canvas id="dspEnergyChart"></canvas></div>
+            <div class="chart-box"><canvas id="dspPowerChart"></canvas></div>
+            <div class="chart-box"><canvas id="dspRmsChart"></canvas></div>
+          </div>
+        </div>
       </div>
     </div>
   </div>
 
+  <!-- Módulo del Laboratorio DSP: se carga ANTES del script principal para
+       que window.MeynaDSP y el HTML del panel (botón/pestañas) ya existan
+       cuando este archivo se auto-inicializa. -->
+  <script src="/dsp.js"></script>
   <script>
     // =====================================================
     // LABORATORIO MULTIMEDIA MEYNARTC
@@ -307,6 +358,11 @@
       localVideo.srcObject = localStream;
       localVideo.style.display = mode === 'audio' ? 'none' : 'block';
       updateStatus(`Modo cambiado: ${describeMode(mode)}`);
+      // Enganche del Laboratorio DSP: la MISMA señal que se acaba de
+      // capturar se conecta también al analizador (en paralelo a WebRTC).
+      // Cubre tanto el primer inicio (startBroadcast) como cada cambio de
+      // modo (switchMode), ya que ambos llaman a startMedia().
+      MeynaDSP.attachStream(localStream);
       return localStream;
     }
 
@@ -333,31 +389,7 @@
             const incoming = { name: message.name, size: message.size, chunks: [], received: 0, mime: message.mime || 'application/octet-stream' };
             channel.__pendingFile = incoming;
             fileStatus.textContent = `Recibiendo ${message.name}...`;
-            updateStatus('Archivo recibido');
-          } else if (message.type === 'done') {
-            const pending = channel.__pendingFile;
-            if (pending) {
-              const blob = new Blob(pending.chunks, { type: pending.mime });
-              const url = URL.createObjectURL(blob);
-              const item = document.createElement('div');
-              item.className = 'file-item';
-              item.innerHTML = `<strong>${pending.name}</strong><br><a href="${url}" target="_blank" download="${pending.name}">Descargar</a>`;
-              if (pending.mime.startsWith('image/')) {
-                const preview = document.createElement('img');
-                preview.src = url;
-                preview.style.maxWidth = '100%';
-                preview.style.borderRadius = '10px';
-                preview.style.marginTop = '8px';
-                item.appendChild(preview);
-              } else if (pending.mime.startsWith('audio/')) {
-                item.innerHTML += `<br><audio controls src="${url}" style="width:100%;margin-top:8px"></audio>`;
-              } else if (pending.mime.startsWith('video/')) {
-                item.innerHTML += `<br><video controls src="${url}" style="width:100%;margin-top:8px"></video>`;
-              }
-              fileList.prepend(item);
-              fileStatus.textContent = `Archivo recibido: ${pending.name}`;
-              updateStatus('Archivo recibido');
-            }
+            updateStatus('Recibiendo archivo');
           }
         } else {
           const pending = channel.__pendingFile;
@@ -365,11 +397,43 @@
             pending.chunks.push(event.data);
             pending.received += event.data.byteLength;
             if (pending.received >= pending.size) {
-              channel.send(JSON.stringify({ type: 'done' }));
+              // Ya llegaron todos los fragmentos: el archivo se construye y se
+              // muestra AQUÍ, en el lado que lo está recibiendo. Antes se
+              // enviaba un mensaje "done" de vuelta a quien lo envió, pero
+              // quien envía nunca tiene los bytes consigo mismo, así que el
+              // archivo jamás llegaba a mostrarse en ningún lado.
+              mostrarArchivoRecibido(pending, fileList, fileStatus);
+              updateStatus('Archivo recibido');
+              channel.__pendingFile = null;
             }
           }
         }
       };
+    }
+
+    // Construye el Blob a partir de los fragmentos recibidos por DataChannel
+    // y lo agrega a la lista de archivos con su enlace de descarga (y una
+    // previsualización si es imagen, audio o video).
+    function mostrarArchivoRecibido(pending, listEl, statusEl) {
+      const blob = new Blob(pending.chunks, { type: pending.mime });
+      const url = URL.createObjectURL(blob);
+      const item = document.createElement('div');
+      item.className = 'file-item';
+      item.innerHTML = `<strong>${pending.name}</strong><br><a href="${url}" target="_blank" download="${pending.name}">Descargar</a>`;
+      if (pending.mime.startsWith('image/')) {
+        const preview = document.createElement('img');
+        preview.src = url;
+        preview.style.maxWidth = '100%';
+        preview.style.borderRadius = '10px';
+        preview.style.marginTop = '8px';
+        item.appendChild(preview);
+      } else if (pending.mime.startsWith('audio/')) {
+        item.innerHTML += `<br><audio controls src="${url}" style="width:100%;margin-top:8px"></audio>`;
+      } else if (pending.mime.startsWith('video/')) {
+        item.innerHTML += `<br><video controls src="${url}" style="width:100%;margin-top:8px"></video>`;
+      }
+      listEl.prepend(item);
+      statusEl.textContent = `Archivo recibido: ${pending.name}`;
     }
 
     function createDataChannel(pc, clientId) {
@@ -577,6 +641,7 @@
       receiversStats.clear();
       selectedReceiverId = '';
       renderReceiverDashboard();
+      MeynaDSP.detachStream(); // el Laboratorio DSP deja de analizar la señal
       if (localStream) {
         stopTracks(localStream);
         localStream = null;

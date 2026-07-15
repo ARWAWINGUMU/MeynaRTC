@@ -40,20 +40,15 @@
 <body>
   <div class="card">
     <h1>Modo oyente</h1>
-    <p>El oyente entra libremente, recibe el stream que corresponda al modo activo y puede visualizar o descargar archivos enviados por DataChannel.</p>
+    <p>Recibe la transmisión en vivo y puede ver o descargar los archivos que comparta el emisor.</p>
     <input id="room" value="demo" placeholder="Nombre de la sala" />
     <input id="listenerName" placeholder="Nombre visible (opcional)" />
     <button id="joinBtn">Conectarme a la sala</button>
     <button class="secondary" id="backBtn">Volver al inicio</button>
     <div id="status" class="status">Esperando para conectarse...</div>
-    <div class="grid" style="margin-top: 12px;">
-      <div>
-        <audio id="remoteAudio" autoplay playsinline></audio>
-        <video id="remoteVideo" class="preview" autoplay playsinline></video>
-      </div>
-      <div>
-        <p class="status">El panel de métricas se mantiene en el emisor para que cada oyente reporte su recepción de forma privada.</p>
-      </div>
+    <div style="margin-top: 12px;">
+      <audio id="remoteAudio" autoplay playsinline></audio>
+      <video id="remoteVideo" class="preview" autoplay playsinline></video>
     </div>
     <h3>Archivos recibidos</h3>
     <div id="fileList" class="file-list"></div>
@@ -106,24 +101,6 @@
           if (message.type === 'meta') {
             channel.__pendingFile = { name: message.name, mime: message.mime, size: message.size, chunks: [], received: 0 };
             status.textContent = `Recibiendo ${message.name}`;
-          } else if (message.type === 'done') {
-            const pending = channel.__pendingFile;
-            if (pending) {
-              const blob = new Blob(pending.chunks, { type: pending.mime });
-              const url = URL.createObjectURL(blob);
-              const item = document.createElement('div');
-              item.className = 'file-item';
-              item.innerHTML = `<strong>${pending.name}</strong><br><a href="${url}" target="_blank" download="${pending.name}">Descargar</a>`;
-              if (pending.mime.startsWith('image/')) {
-                item.innerHTML += `<br><img src="${url}" style="max-width:100%;margin-top:8px;border-radius:10px" />`;
-              } else if (pending.mime.startsWith('audio/')) {
-                item.innerHTML += `<br><audio controls src="${url}" style="width:100%;margin-top:8px"></audio>`;
-              } else if (pending.mime.startsWith('video/')) {
-                item.innerHTML += `<br><video controls src="${url}" style="width:100%;margin-top:8px"></video>`;
-              }
-              fileList.prepend(item);
-              status.textContent = `Archivo recibido: ${pending.name}`;
-            }
           }
         } else {
           const pending = channel.__pendingFile;
@@ -131,11 +108,34 @@
             pending.chunks.push(event.data);
             pending.received += event.data.byteLength;
             if (pending.received >= pending.size) {
-              channel.send(JSON.stringify({ type: 'done' }));
+              // El archivo se reconstruye y se muestra AQUÍ, apenas terminan
+              // de llegar todos sus fragmentos por el DataChannel.
+              mostrarArchivoRecibido(pending);
+              channel.__pendingFile = null;
             }
           }
         }
       };
+    }
+
+    // Construye el Blob a partir de los fragmentos recibidos y lo agrega a
+    // la lista de archivos con su enlace de descarga (y previsualización si
+    // corresponde según el tipo MIME).
+    function mostrarArchivoRecibido(pending) {
+      const blob = new Blob(pending.chunks, { type: pending.mime });
+      const url = URL.createObjectURL(blob);
+      const item = document.createElement('div');
+      item.className = 'file-item';
+      item.innerHTML = `<strong>${pending.name}</strong><br><a href="${url}" target="_blank" download="${pending.name}">Descargar</a>`;
+      if (pending.mime.startsWith('image/')) {
+        item.innerHTML += `<br><img src="${url}" style="max-width:100%;margin-top:8px;border-radius:10px" />`;
+      } else if (pending.mime.startsWith('audio/')) {
+        item.innerHTML += `<br><audio controls src="${url}" style="width:100%;margin-top:8px"></audio>`;
+      } else if (pending.mime.startsWith('video/')) {
+        item.innerHTML += `<br><video controls src="${url}" style="width:100%;margin-top:8px"></video>`;
+      }
+      fileList.prepend(item);
+      status.textContent = `Archivo recibido: ${pending.name}`;
     }
 
     async function handleOffer(offer) {

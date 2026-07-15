@@ -109,6 +109,11 @@ fun Application.module() {
             call.respondText(readResource("static/oyente.html"), ContentType.Text.Html)
         }
 
+        // Sirve el módulo del Laboratorio DSP (análisis de la señal en el emisor).
+        get("/dsp.js") {
+            call.respondText(readResource("static/dsp.js"), ContentType.Text.JavaScript)
+        }
+
         // Genera un captcha simple para el formulario de login del emisor.
         get("/captcha") {
             val token = UUID.randomUUID().toString()
