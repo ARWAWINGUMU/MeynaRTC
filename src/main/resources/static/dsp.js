@@ -53,6 +53,11 @@ window.MeynaDSP = (function () {
   let bufferIm = null;          // parte imaginaria del espectro.
   let bufferMagnitudesDb = null; // magnitud en dB por cada bin de frecuencia (solo hasta Nyquist).
 
+  // Canvases de las pestañas de la Fase 1, resueltos una sola vez.
+  let canvasOsciloscopio = null;
+  let canvasFft = null;
+  let canvasEspectrograma = null;
+
   // Gráficas de Chart.js para la pestaña de Estadísticas (se crean una sola
   // vez, de forma perezosa, reutilizando el helper createChart() que YA
   // existe en index.html para las gráficas de bitrate/jitter/etc.).
@@ -212,8 +217,10 @@ window.MeynaDSP = (function () {
   // -------------------------------------------------------------------
   // Dibujo: Osciloscopio (dominio del tiempo)
   // -------------------------------------------------------------------
-  function dibujarOsciloscopio(buffer) {
-    const canvas = document.getElementById('dspOscilloscopeCanvas');
+  // Recibe el canvas como parámetro (en vez de resolver un ID fijo) para
+  // poder reutilizarse tanto en las pestañas de la Fase 1 como en la
+  // comparación original/procesada de la Fase 2 (dsp-visualizer.js).
+  function dibujarOsciloscopio(buffer, canvas) {
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     const w = canvas.width, h = canvas.height;
@@ -244,8 +251,10 @@ window.MeynaDSP = (function () {
   // -------------------------------------------------------------------
   // Dibujo: Espectro FFT (dominio de la frecuencia)
   // -------------------------------------------------------------------
-  function dibujarFft(magnitudesDb) {
-    const canvas = document.getElementById('dspFftCanvas');
+  // Igual que dibujarOsciloscopio: el canvas se recibe por parámetro para
+  // que la Fase 2 pueda reutilizar esta misma función con el analizador
+  // de la señal procesada, sin duplicar el código de dibujo.
+  function dibujarFft(magnitudesDb, canvas) {
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     const w = canvas.width, h = canvas.height;
@@ -290,8 +299,9 @@ window.MeynaDSP = (function () {
   // -------------------------------------------------------------------
   // Dibujo: Espectrograma (tiempo x frecuencia x color=intensidad)
   // -------------------------------------------------------------------
-  function dibujarColumnaEspectrograma(magnitudesDb) {
-    const canvas = document.getElementById('dspSpectrogramCanvas');
+  // También parametrizado por canvas: la Fase 2 reutiliza esta función
+  // para el espectrograma de la señal PROCESADA en la pestaña "Filtros".
+  function dibujarColumnaEspectrograma(magnitudesDb, canvas) {
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     const w = canvas.width, h = canvas.height;
@@ -376,9 +386,13 @@ window.MeynaDSP = (function () {
     rafId = requestAnimationFrame(loopPrincipal);
     if (!analyser) return;
 
+    if (!canvasOsciloscopio) canvasOsciloscopio = document.getElementById('dspOscilloscopeCanvas');
+    if (!canvasFft) canvasFft = document.getElementById('dspFftCanvas');
+    if (!canvasEspectrograma) canvasEspectrograma = document.getElementById('dspSpectrogramCanvas');
+
     // Osciloscopio: se redibuja cada frame (barato, no involucra la FFT).
     analyser.getFloatTimeDomainData(bufferTiempo);
-    dibujarOsciloscopio(bufferTiempo);
+    dibujarOsciloscopio(bufferTiempo, canvasOsciloscopio);
 
     // FFT + espectrograma + estadísticas: throttle a ~10 Hz, no hace
     // falta recalcularlos a 60fps para que se vean "en tiempo real".
@@ -391,8 +405,8 @@ window.MeynaDSP = (function () {
       calcularFFT(bufferRe, bufferIm);
 
       calcularMagnitudesDb(bufferRe, bufferIm, bufferMagnitudesDb);
-      dibujarFft(bufferMagnitudesDb);
-      dibujarColumnaEspectrograma(bufferMagnitudesDb);
+      dibujarFft(bufferMagnitudesDb, canvasFft);
+      dibujarColumnaEspectrograma(bufferMagnitudesDb, canvasEspectrograma);
 
       // Las estadísticas se calculan sobre la señal CRUDA (sin ventana de
       // Hann): la ventana es una herramienta exclusiva del análisis
@@ -473,6 +487,47 @@ window.MeynaDSP = (function () {
   }
 
   // -------------------------------------------------------------------
+  // API para otros módulos (Fase 2: audio-dsp-engine.js / dsp-visualizer.js)
+  // -------------------------------------------------------------------
+  // Estas tres funciones permiten que la cadena de procesamiento de la
+  // Fase 2 comparta el ÚNICO AudioContext/MediaStreamSource que este
+  // módulo ya administra, en vez de crear los suyos propios: debe existir
+  // un solo flujo de captura de audio en toda la app, con varias ramas
+  // colgando de él (la de análisis original, ya existente, y la de
+  // procesamiento, nueva).
+
+  // Getter del AudioContext único de la sesión (null si aún no se llamó
+  // attachStream ninguna vez).
+  function obtenerAudioContext() {
+    return audioCtx;
+  }
+
+  // Getter del AnalyserNode de la señal ORIGINAL (el que ya usan las 4
+  // pestañas de la Fase 1). Se expone para que la vista de comparación
+  // pueda leer la misma señal "antes" sin crear un analizador redundante:
+  // getFloatTimeDomainData()/getFloatFrequencyData() son de solo lectura,
+  // así que múltiples consumidores pueden leerlo sin interferir entre sí.
+  function obtenerAnalyser() {
+    return analyser;
+  }
+
+  // Conecta un nodo de audio adicional al sourceNode VIGENTE. Debe
+  // llamarse cada vez que el módulo que lo usa se "re-adjunta" (es decir,
+  // en cada startMedia(), justo después de MeynaDSP.attachStream), porque
+  // sourceNode es un objeto nuevo en cada cambio de modo. Como cada
+  // sourceNode nuevo nace sin conexiones salientes, llamar esto una vez
+  // por adjunte nunca duplica la conexión.
+  // Devuelve false (sin lanzar error) si todavía no hay una captura activa
+  // con pista de audio -el caso típico es compartir pantalla sin audio del
+  // sistema-, para que el módulo llamante pueda quedar en estado de espera
+  // en vez de romperse.
+  function conectarRamaAdicional(nodo) {
+    if (!sourceNode || !nodo) return false;
+    sourceNode.connect(nodo);
+    return true;
+  }
+
+  // -------------------------------------------------------------------
   // Interfaz: botón, panel y pestañas
   // -------------------------------------------------------------------
   function initUI() {
@@ -528,5 +583,27 @@ window.MeynaDSP = (function () {
   // elementos ya existen en el DOM en este punto).
   initUI();
 
-  return { attachStream: attachStream, detachStream: detachStream };
+  return {
+    // API original (Fase 1).
+    attachStream: attachStream,
+    detachStream: detachStream,
+    // API para compartir el AudioContext/MediaStreamSource único y las
+    // herramientas de cálculo/dibujo con la Fase 2 (audio-dsp-engine.js,
+    // dsp-visualizer.js), evitando duplicar código o crear un segundo
+    // AudioContext.
+    obtenerAudioContext: obtenerAudioContext,
+    obtenerAnalyser: obtenerAnalyser,
+    conectarRamaAdicional: conectarRamaAdicional,
+    calcularFFT: calcularFFT,
+    aplicarVentanaHann: aplicarVentanaHann,
+    calcularMagnitudesDb: calcularMagnitudesDb,
+    calcularEstadisticas: calcularEstadisticas,
+    colorPorDb: colorPorDb,
+    dibujarOsciloscopio: dibujarOsciloscopio,
+    dibujarFft: dibujarFft,
+    dibujarColumnaEspectrograma: dibujarColumnaEspectrograma,
+    FFT_SIZE: FFT_SIZE,
+    DB_MIN: DB_MIN,
+    DB_MAX: DB_MAX
+  };
 })();

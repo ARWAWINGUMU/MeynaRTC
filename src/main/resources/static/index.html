@@ -55,10 +55,22 @@
     th, td { text-align: left; padding: 8px; border-bottom: 1px solid var(--border); font-size: 0.95rem; }
     @media (max-width: 900px) { .grid-2, .metrics-grid, .row { grid-template-columns: 1fr; } }
     /* Laboratorio DSP: pestañas y canvases de visualización. */
-    .dsp-tabs { display: grid; gap: 8px; grid-template-columns: repeat(4, minmax(0, 1fr)); margin-top: 12px; }
+    .dsp-tabs { display: grid; gap: 8px; grid-template-columns: repeat(5, minmax(0, 1fr)); margin-top: 12px; }
     .dsp-tab-btn.active { background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #07111f; }
     .dsp-tab-content canvas { width: 100%; height: auto; max-width: 100%; background: #02070d; border-radius: 10px; border: 1px solid var(--border); }
     @media (max-width: 900px) { .dsp-tabs { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+    /* Fase 2: pestaña "Filtros" (procesamiento). */
+    .dsp-filter-section { margin-top: 14px; }
+    .dsp-filter-section h4 { margin-bottom: 4px; }
+    .dsp-slider-row { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 10px; margin-top: 8px; }
+    .dsp-slider-row input[type="range"] { width: 100%; padding: 0; }
+    .dsp-slider-row span { color: var(--muted); font-size: 0.85rem; min-width: 70px; text-align: right; }
+    .dsp-check-row { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+    .dsp-check-row input[type="checkbox"] { width: auto; }
+    .dsp-preset-row { display: grid; gap: 8px; grid-template-columns: repeat(4, minmax(0, 1fr)); margin-top: 8px; }
+    .dsp-compare-grid { display: grid; gap: 12px; grid-template-columns: 1fr 1fr; margin-top: 12px; }
+    .dsp-compare-grid canvas { width: 100%; height: auto; background: #02070d; border-radius: 10px; border: 1px solid var(--border); }
+    @media (max-width: 900px) { .dsp-preset-row { grid-template-columns: repeat(2, minmax(0, 1fr)); } .dsp-compare-grid { grid-template-columns: 1fr; } }
   </style>
 </head>
 <body>
@@ -158,6 +170,7 @@
             <button class="secondary dsp-tab-btn" data-target="dspTabFft">FFT</button>
             <button class="secondary dsp-tab-btn" data-target="dspTabEspectrograma">Espectrograma</button>
             <button class="secondary dsp-tab-btn" data-target="dspTabEstadisticas">Estadísticas</button>
+            <button class="secondary dsp-tab-btn" data-target="dspTabFiltros">Filtros</button>
           </div>
 
           <div id="dspTabOsciloscopio" class="dsp-tab-content chart-box">
@@ -189,6 +202,122 @@
             <div class="chart-box"><canvas id="dspPowerChart"></canvas></div>
             <div class="chart-box"><canvas id="dspRmsChart"></canvas></div>
           </div>
+
+          <div id="dspTabFiltros" class="dsp-tab-content" style="display: none;">
+            <h4>Procesamiento de señales</h4>
+            <p class="small">Modifica de verdad la señal capturada (filtros con BiquadFilterNode, ruido blanco mezclado) y compárala en vivo contra la original. Nada de esto se transmite a los oyentes hasta activar "Transmitir audio procesado" abajo.</p>
+
+            <div class="dsp-filter-section">
+              <h4>Filtro</h4>
+              <select id="dspFilterType">
+                <option value="ninguno">Sin filtro</option>
+                <option value="pasabajos">Pasa-bajos</option>
+                <option value="pasaaltos">Pasa-altos</option>
+                <option value="pasabanda">Pasa-banda</option>
+                <option value="notch">Notch (rechazo de banda)</option>
+              </select>
+
+              <div id="dspCutoffGroup" style="display: none;">
+                <div class="dsp-slider-row">
+                  <input id="dspCutoffFreq" type="range" min="100" max="8000" step="10" value="1000" />
+                  <span>Corte: <span id="dspCutoffFreqLabel">1000</span> Hz</span>
+                </div>
+              </div>
+
+              <div id="dspBandGroup" style="display: none;">
+                <div class="dsp-slider-row">
+                  <input id="dspLowFreq" type="range" min="50" max="4000" step="10" value="300" />
+                  <span>Inferior: <span id="dspLowFreqLabel">300</span> Hz</span>
+                </div>
+                <div class="dsp-slider-row">
+                  <input id="dspHighFreq" type="range" min="200" max="12000" step="10" value="3400" />
+                  <span>Superior: <span id="dspHighFreqLabel">3400</span> Hz</span>
+                </div>
+              </div>
+
+              <div id="dspNotchGroup" style="display: none;">
+                <div class="dsp-slider-row">
+                  <input id="dspNotchFreq" type="range" min="20" max="2000" step="1" value="60" />
+                  <span>Central: <span id="dspNotchFreqLabel">60</span> Hz</span>
+                </div>
+              </div>
+
+              <div id="dspQGroup" style="display: none;">
+                <div class="dsp-slider-row">
+                  <input id="dspFilterQ" type="range" min="0.1" max="20" step="0.1" value="0.71" />
+                  <span>Q: <span id="dspFilterQLabel">0.71</span></span>
+                </div>
+              </div>
+
+              <button class="secondary" id="dspFilterResetBtn" style="margin-top: 10px;">Restaurar valores</button>
+            </div>
+
+            <div class="dsp-filter-section">
+              <h4>Ruido</h4>
+              <div class="dsp-check-row">
+                <input id="dspNoiseActive" type="checkbox" />
+                <label for="dspNoiseActive">Inyectar ruido blanco</label>
+              </div>
+              <div class="dsp-slider-row">
+                <input id="dspNoiseIntensity" type="range" min="0" max="100" step="1" value="30" />
+                <span>Intensidad: <span id="dspNoiseIntensityLabel">30</span> %</span>
+              </div>
+            </div>
+
+            <div class="dsp-filter-section">
+              <h4>Transmisión</h4>
+              <div class="dsp-check-row">
+                <input id="dspTransmitProcessed" type="checkbox" />
+                <label for="dspTransmitProcessed">Transmitir audio procesado</label>
+              </div>
+              <div id="dspProcessingHint" class="small"></div>
+              <div class="metrics-grid">
+                <div class="metrics-card"><strong>Filtro activo</strong><div id="dspFilterActiveIndicator" class="small">Sin filtro</div></div>
+                <div class="metrics-card"><strong>Frecuencia de corte</strong><div id="dspCutoffIndicator" class="small">—</div></div>
+                <div class="metrics-card"><strong>Ruido activo</strong><div id="dspNoiseActiveIndicator" class="small">No</div></div>
+                <div class="metrics-card"><strong>SNR estimado</strong><div id="dspSnrIndicator" class="small">— (ruido inactivo)</div></div>
+              </div>
+              <div class="metrics-grid">
+                <div class="metrics-card"><strong>Potencia señal</strong><div id="dspSignalPowerIndicator" class="small">0</div></div>
+                <div class="metrics-card"><strong>Potencia ruido</strong><div id="dspNoisePowerIndicator" class="small">0</div></div>
+              </div>
+            </div>
+
+            <div class="dsp-filter-section">
+              <h4>Presets didácticos</h4>
+              <p class="small">Configuraciones de referencia para el aula, no modelos universales de canal.</p>
+              <div class="dsp-preset-row">
+                <button class="secondary" id="dspPresetVozClara">Voz clara</button>
+                <button class="secondary" id="dspPresetTelefonico">Canal telefónico</button>
+                <button class="secondary" id="dspPresetZumbido">Eliminación de zumbido</button>
+                <button class="secondary" id="dspPresetRuido">Canal con ruido</button>
+              </div>
+            </div>
+
+            <div class="dsp-filter-section">
+              <h4>Comparación en vivo: original vs. procesada</h4>
+              <div class="dsp-compare-grid">
+                <div>
+                  <p class="small">Osciloscopio original</p>
+                  <canvas id="dspOriginalOscilloscopeCanvas" width="500" height="160"></canvas>
+                </div>
+                <div>
+                  <p class="small">Osciloscopio procesada</p>
+                  <canvas id="dspProcessedOscilloscopeCanvas" width="500" height="160"></canvas>
+                </div>
+                <div>
+                  <p class="small">FFT original</p>
+                  <canvas id="dspOriginalFftCanvas" width="500" height="160"></canvas>
+                </div>
+                <div>
+                  <p class="small">FFT procesada</p>
+                  <canvas id="dspProcessedFftCanvas" width="500" height="160"></canvas>
+                </div>
+              </div>
+              <p class="small" style="margin-top: 12px;">Espectrograma de la señal procesada (el original está disponible en la pestaña "Espectrograma"):</p>
+              <canvas id="dspProcessedSpectrogramCanvas" width="1020" height="200"></canvas>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -198,6 +327,11 @@
        que window.MeynaDSP y el HTML del panel (botón/pestañas) ya existan
        cuando este archivo se auto-inicializa. -->
   <script src="/dsp.js"></script>
+  <!-- Fase 2: motor de procesamiento (filtros/ruido/SNR) y visualizador de
+       comparación. Se cargan DESPUÉS de dsp.js (dependen de su API) y
+       ANTES del script principal (dependen del HTML de la pestaña "Filtros"). -->
+  <script src="/audio-dsp-engine.js"></script>
+  <script src="/dsp-visualizer.js"></script>
   <script>
     // =====================================================
     // LABORATORIO MULTIMEDIA MEYNARTC
@@ -363,6 +497,11 @@
       // Cubre tanto el primer inicio (startBroadcast) como cada cambio de
       // modo (switchMode), ya que ambos llaman a startMedia().
       MeynaDSP.attachStream(localStream);
+      // Fase 2: el motor de procesamiento se re-adjunta DESPUÉS de dsp.js,
+      // reutilizando su mismo AudioContext/MediaStreamSource (nunca crea
+      // uno propio). Debe ir después para que MeynaDSP ya haya (re)creado
+      // el sourceNode de este ciclo.
+      MeynaAudioEngine.attachStream();
       return localStream;
     }
 
@@ -477,11 +616,50 @@
       sendSignal('offer', { type: offer.type, sdp: offer.sdp }, clientId);
     }
 
+    // Devuelve la pista de audio que se debe ENVIAR por WebRTC en este
+    // momento: la procesada por la Fase 2 (filtros/ruido) si el usuario
+    // activó "Transmitir audio procesado" y el motor ya tiene una pista
+    // lista, o si no la pista cruda del stream capturado. Centralizar esta
+    // decisión aquí evita que un punto (ej. switchMode) se "olvide" de
+    // consultar el estado del procesamiento y revierta silenciosamente al
+    // audio sin procesar.
+    function obtenerPistaAudioParaEnvio(stream) {
+      const pistaProcesada = window.MeynaAudioEngine && MeynaAudioEngine.obtenerPistaAudioActiva();
+      return pistaProcesada || stream.getAudioTracks()[0] || null;
+    }
+
+    // Reemplaza la pista de audio en TODAS las PeerConnection activas sin
+    // renegociar ni desconectar a nadie (replaceTrack() de una pista del
+    // mismo "kind" no dispara negotiationneeded). Se dispara cuando el
+    // usuario activa/desactiva "Transmitir audio procesado" en la pestaña
+    // Filtros. Usa Promise.allSettled para que un oyente con la conexión
+    // en mal estado no bloquee el reemplazo en los demás.
+    async function aplicarPistaAudioATodosLosOyentes() {
+      if (!localStream) return; // sin transmisión activa; se aplicará al arrancar, vía createPeerConnectionForListener.
+      const nuevaPista = obtenerPistaAudioParaEnvio(localStream);
+      const resultados = await Promise.allSettled(
+        Array.from(peerConnections.values()).map(pc => {
+          const sender = pc.getSenders().find(s => s.track && s.track.kind === 'audio');
+          if (!sender) return Promise.resolve();
+          return sender.replaceTrack(nuevaPista);
+        })
+      );
+      resultados.forEach(resultado => {
+        if (resultado.status === 'rejected') {
+          console.warn('No se pudo reemplazar la pista de audio de un oyente', resultado.reason);
+        }
+      });
+    }
+
+    if (window.MeynaAudioEngine) {
+      MeynaAudioEngine.alCambiarPistaActiva(aplicarPistaAudioATodosLosOyentes);
+    }
+
     async function switchMode(nextMode) {
       if (!broadcastActive || !localStream) return;
       const stream = await startMedia(nextMode);
       const tracksByKind = {
-        audio: stream.getAudioTracks()[0] || null,
+        audio: obtenerPistaAudioParaEnvio(stream),
         video: stream.getVideoTracks()[0] || null
       };
       for (const [clientId, pc] of peerConnections.entries()) {
@@ -507,7 +685,17 @@
     async function createPeerConnectionForListener(clientId) {
       if (peerConnections.has(clientId)) return;
       const pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
-      localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+      // La pista de audio puede ser la procesada por la Fase 2 (si
+      // "Transmitir audio procesado" ya estaba activo cuando este oyente
+      // se unió); la de video sigue viniendo tal cual de localStream.
+      const pistaAudioInicial = obtenerPistaAudioParaEnvio(localStream);
+      localStream.getTracks().forEach(track => {
+        if (track.kind === 'audio') {
+          pc.addTrack(pistaAudioInicial || track, localStream);
+        } else {
+          pc.addTrack(track, localStream);
+        }
+      });
       createDataChannel(pc, clientId);
       pc.onicecandidate = (event) => {
         if (event.candidate) {
@@ -642,6 +830,7 @@
       selectedReceiverId = '';
       renderReceiverDashboard();
       MeynaDSP.detachStream(); // el Laboratorio DSP deja de analizar la señal
+      MeynaAudioEngine.detachStream(); // la Fase 2 deja de procesar/transmitir la señal modificada
       if (localStream) {
         stopTracks(localStream);
         localStream = null;

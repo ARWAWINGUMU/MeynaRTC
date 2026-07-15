@@ -114,6 +114,15 @@ fun Application.module() {
             call.respondText(readResource("static/dsp.js"), ContentType.Text.JavaScript)
         }
 
+        // Fase 2 del Laboratorio DSP: motor de procesamiento (filtros/ruido/SNR)
+        // y visualizador de comparación original-vs-procesada.
+        get("/audio-dsp-engine.js") {
+            call.respondText(readResource("static/audio-dsp-engine.js"), ContentType.Text.JavaScript)
+        }
+        get("/dsp-visualizer.js") {
+            call.respondText(readResource("static/dsp-visualizer.js"), ContentType.Text.JavaScript)
+        }
+
         // Genera un captcha simple para el formulario de login del emisor.
         get("/captcha") {
             val token = UUID.randomUUID().toString()
