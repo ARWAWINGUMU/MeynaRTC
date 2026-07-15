@@ -460,6 +460,7 @@
           <div id="dspTabExperimento" class="dsp-tab-content" style="display: none;">
             <h4>Modo Experimento</h4>
             <p class="small">Registra métricas durante una prueba controlada y genera un resumen automático. Los datos solo se guardan en memoria del navegador (no hay base de datos todavía).</p>
+            <p class="small">Con varios oyentes conectados, el bitrate/jitter/pérdida/RTT "reales" registrados corresponden al <strong>último oyente conectado</strong>, no a un promedio de todos ni al peor receptor.</p>
 
             <div class="dsp-filter-section">
               <label class="hint" for="dspExpName">Nombre del experimento</label>
@@ -561,6 +562,16 @@
     // dsp-interpreter.js / dsp-experiment.js las reutilicen sin volver a
     // medir nada ni inventar un valor. Nunca confundir con las
     // degradaciones artificiales configuradas en la pestaña "Canal".
+    //
+    // OJO con múltiples oyentes: startStatsMonitor(pc) se reinicia con
+    // CADA oyente nuevo (createPeerConnectionForListener llama
+    // startStatsMonitor(pc) una vez más, reemplazando el intervalo
+    // anterior) — así que estos valores son los del ÚLTIMO oyente
+    // conectado en ese momento, NO un promedio de todos los oyentes, NI
+    // los del emisor, NI el "peor" receptor. Es una simplificación
+    // existente del panel de métricas (Fase 1); el Modo Experimento y la
+    // Interpretación heredan esa misma limitación y debe quedar claro al
+    // interpretar resultados con varios oyentes conectados.
     window.obtenerMetricasWebRTC = function () {
       return {
         bitrate: parseFloat(bitrateValue.textContent) || 0,

@@ -35,8 +35,16 @@ window.MeynaDspExperiment = (function () {
   function capturarMuestra() {
     const interprete = window.MeynaDspInterpreter;
     const channel = window.MeynaDspChannel;
-    const analisis = interprete ? interprete.obtenerUltimoAnalisis() : null;
-    if (!analisis) return null; // aún no hay un ciclo de análisis calculado (la pestaña Interpretación debe haberse activado al menos una vez).
+    // IMPORTANTE: calcularAnalisisAhora() (no obtenerUltimoAnalisis()).
+    // obtenerUltimoAnalisis() devuelve un análisis cacheado que solo se
+    // refresca mientras la pestaña "Interpretación" está visible; si el
+    // experimento corre con otra pestaña abierta, ese caché queda
+    // congelado y TODAS las muestras terminan repitiendo el mismo valor
+    // (la causa exacta de que promedio=mínimo=máximo y desviación=0).
+    // calcularAnalisisAhora() vuelve a leer los analizadores de audio y
+    // las métricas de WebRTC en el instante mismo de cada llamada.
+    const analisis = interprete ? interprete.calcularAnalisisAhora() : null;
+    if (!analisis) return null; // sin datos suficientes todavía (ej. transmisión recién iniciada).
     const canal = channel ? channel.obtenerConfiguracionCanal() : { retardoMs: 0, jitterActivo: false, jitterAmplitudMs: 0, perdidaPorcentaje: 0, bitrateObjetivoBps: null };
     return {
       timestamp: Date.now(),
@@ -126,9 +134,14 @@ window.MeynaDspExperiment = (function () {
   // -------------------------------------------------------------------
   // Reporte: promedios/min/max/variabilidad + comparación + conclusión
   // -------------------------------------------------------------------
+  // Nunca inventa un valor: si no hay muestras numéricas válidas para un
+  // campo (ej. SNR con el ruido siempre desactivado durante todo el
+  // experimento), n queda en 0 y promedio/minimo/maximo/desviacion en
+  // null — quien muestre el reporte debe imprimir "sin datos suficientes"
+  // en ese caso, nunca un 0 que parecería una medición real.
   function calcularEstadisticaSerie(valores) {
     const n = valores.length;
-    if (n === 0) return { promedio: 0, minimo: 0, maximo: 0, desviacion: 0, n: 0 };
+    if (n === 0) return { promedio: null, minimo: null, maximo: null, desviacion: null, n: 0 };
     let suma = 0, minimo = valores[0], maximo = valores[0];
     for (let i = 0; i < n; i++) {
       suma += valores[i];
@@ -172,7 +185,9 @@ window.MeynaDspExperiment = (function () {
     CAMPOS_NUMERICOS.forEach(function (campo) {
       const valores = muestras
         .map(function (m) { return m[campo]; })
-        .filter(function (v) { return typeof v === 'number' && !isNaN(v); });
+        // isFinite() (no solo !isNaN()) descarta también ±Infinity, que
+        // isNaN() deja pasar y podría colarse como "dato válido".
+        .filter(function (v) { return typeof v === 'number' && isFinite(v); });
       series[campo] = calcularEstadisticaSerie(valores);
     });
 
@@ -193,15 +208,24 @@ window.MeynaDspExperiment = (function () {
 
     // Calidad estimada del experimento completo: la MISMA rúbrica que el
     // panel en vivo, aplicada a los PROMEDIOS de la serie (no a un
-    // instante aislado).
+    // instante aislado). Si NINGUNA métrica real de WebRTC se pudo medir
+    // durante todo el experimento (ej. no hubo ningún oyente conectado),
+    // no se inventa una calidad "perfecta" a partir de ceros — se reporta
+    // explícitamente que no hay datos suficientes.
     const interprete = window.MeynaDspInterpreter;
-    const calidad = interprete
+    const huboMetricasWebRTC = series.bitrate.n > 0 || series.jitter.n > 0 || series.perdida.n > 0 || series.rtt.n > 0;
+    const calidad = (interprete && huboMetricasWebRTC)
       ? interprete.clasificarCalidad(
-          { bitrate: series.bitrate.promedio, jitter: series.jitter.promedio, perdida: series.perdida.promedio, rtt: series.rtt.promedio },
+          {
+            bitrate: series.bitrate.n > 0 ? series.bitrate.promedio : 0,
+            jitter: series.jitter.n > 0 ? series.jitter.promedio : 0,
+            perdida: series.perdida.n > 0 ? series.perdida.promedio : 0,
+            rtt: series.rtt.n > 0 ? series.rtt.promedio : 0
+          },
           series.snr.n > 0,
           series.snr.promedio
         )
-      : { etiqueta: 'Sin datos', desglose: {} };
+      : { etiqueta: 'Sin datos suficientes', desglose: {} };
 
     return {
       nombre: nombreExperimento,
@@ -254,6 +278,14 @@ window.MeynaDspExperiment = (function () {
     descargarArchivo(ultimoReporte.nombre + '.csv', csv, 'text/csv');
   }
 
+  // Formatea el promedio de una serie, o "sin datos suficientes" si esa
+  // métrica nunca se pudo medir durante el experimento (n === 0) — nunca
+  // se muestra un 0 que podría confundirse con una medición real.
+  function formatearPromedio(serie, decimales, unidad) {
+    if (!serie || serie.n === 0) return 'sin datos suficientes';
+    return serie.promedio.toFixed(decimales === undefined ? 1 : decimales) + (unidad || '');
+  }
+
   function construirResumenTexto(reporte) {
     const s = reporte.series;
     const lineas = [
@@ -267,9 +299,9 @@ window.MeynaDspExperiment = (function () {
       '- SNR inicial: ' + (reporte.snrInicial !== null ? reporte.snrInicial.toFixed(1) + ' dB' : '—'),
       '- SNR final: ' + (reporte.snrFinal !== null ? reporte.snrFinal.toFixed(1) + ' dB' : '—'),
       '- Mejora de SNR: ' + (reporte.mejoraSNR !== null ? (reporte.mejoraSNR >= 0 ? '+' : '') + reporte.mejoraSNR.toFixed(1) + ' dB' : '—'),
-      '- Bitrate promedio: ' + Math.round(s.bitrate.promedio) + ' kbps',
-      '- Jitter promedio: ' + s.jitter.promedio.toFixed(1) + ' ms',
-      '- Pérdida promedio: ' + s.perdida.promedio.toFixed(1) + ' %',
+      '- Bitrate promedio: ' + formatearPromedio(s.bitrate, 0, ' kbps'),
+      '- Jitter promedio: ' + formatearPromedio(s.jitter, 1, ' ms'),
+      '- Pérdida promedio: ' + formatearPromedio(s.perdida, 1, ' %'),
       '- Calidad estimada: ' + reporte.calidadEstimada.etiqueta,
       '',
       'Conclusión:',
@@ -318,6 +350,11 @@ window.MeynaDspExperiment = (function () {
     const s = reporte.series;
     const filaMetrica = function (etiqueta, serie, unidad, decimales) {
       const d = decimales === undefined ? 1 : decimales;
+      if (!serie || serie.n === 0) {
+        // Nunca se inventa un 0: si la métrica no se pudo medir ni una
+        // vez durante el experimento, se dice explícitamente.
+        return '<tr><td>' + etiqueta + '</td><td colspan="4" class="small">Sin datos suficientes</td></tr>';
+      }
       return '<tr><td>' + etiqueta + '</td><td>' + serie.promedio.toFixed(d) + ' ' + unidad + '</td><td>' + serie.minimo.toFixed(d) + '</td><td>' + serie.maximo.toFixed(d) + '</td><td>' + serie.desviacion.toFixed(d) + '</td></tr>';
     };
     caja.innerHTML =

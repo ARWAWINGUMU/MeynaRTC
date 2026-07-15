@@ -287,7 +287,30 @@ window.MeynaDspInterpreter = (function () {
   }, INTERVALO_MS);
 
   return {
+    // ATENCIÓN: obtenerUltimoAnalisis() devuelve el último análisis que
+    // calculó tick() — y tick() SOLO corre mientras la pestaña
+    // "Interpretación" está visible (estaVisible(), arriba). Si el usuario
+    // está en otra pestaña (ej. "Experimento"), este valor queda
+    // CONGELADO. No usar este getter para grabar muestras periódicas;
+    // para eso existe calcularAnalisisAhora() (ver abajo).
     obtenerUltimoAnalisis: function () { return ultimoAnalisis; },
+    // Calcula un análisis FRESCO en el momento, sin depender de que la
+    // pestaña "Interpretación" esté visible ni de ningún temporizador
+    // propio. dsp-experiment.js debe usar SIEMPRE esta función (no
+    // obtenerUltimoAnalisis) para que cada muestra grabada refleje el
+    // estado real en ese instante — este era exactamente el bug: el modo
+    // experimento leía el análisis cacheado, que solo se actualiza cuando
+    // esta pestaña está en pantalla, así que todas las muestras terminaban
+    // repitiendo el mismo valor congelado.
+    calcularAnalisisAhora: function () {
+      try {
+        if (!asegurarBuffers()) return null;
+        return calcularAnalisis();
+      } catch (err) {
+        console.warn('MeynaDspInterpreter: error al calcular análisis bajo demanda', err);
+        return null;
+      }
+    },
     // Se reutiliza tal cual desde dsp-experiment.js para que el reporte
     // final use EXACTAMENTE la misma rúbrica que el panel en vivo (nunca
     // una segunda copia de los umbrales).
