@@ -173,6 +173,81 @@ window.MeynaDSP = (function () {
   }
 
   // -------------------------------------------------------------------
+  // MATEMÁTICA: Frecuencia dominante y ancho de banda ocupado
+  // -------------------------------------------------------------------
+  // Estas dos funciones alimentan el panel de Interpretación Automática
+  // (Fase 3): traducen el espectro crudo en dos números que un estudiante
+  // puede interpretar directamente.
+
+  // Frecuencia dominante: el bin de mayor magnitud del espectro, ignorando
+  // una banda de guarda cerca de 0 Hz (continua/retumbo subsónico, que no
+  // representa contenido de voz relevante y podría dominar el espectro
+  // por errores de offset del micrófono).
+  function calcularFrecuenciaDominante(magnitudesDb, sampleRate) {
+    const FRECUENCIA_MINIMA_HZ = 40;
+    const nyquist = sampleRate / 2;
+    const mitad = magnitudesDb.length;
+    const binMinimo = Math.max(1, Math.round((FRECUENCIA_MINIMA_HZ / nyquist) * mitad));
+    let mejorBin = binMinimo;
+    let mejorDb = magnitudesDb[binMinimo] !== undefined ? magnitudesDb[binMinimo] : DB_MIN;
+    for (let k = binMinimo; k < mitad; k++) {
+      if (magnitudesDb[k] > mejorDb) {
+        mejorDb = magnitudesDb[k];
+        mejorBin = k;
+      }
+    }
+    return { frecuenciaHz: (mejorBin / mitad) * nyquist, magnitudDb: mejorDb };
+  }
+
+  // Ancho de banda ocupado: la banda [frecuenciaInferior, frecuenciaSuperior]
+  // que concentra el `porcentajeEnergia` central de la energía espectral
+  // total (por defecto 90%: se descarta un 5% de energía por debajo del
+  // límite inferior y un 5% por encima del superior). Es un criterio
+  // estándar y documentado -no arbitrario- para resumir "dónde vive" la
+  // energía de una señal de banda ancha como la voz.
+  //
+  // La energía es proporcional al CUADRADO de la magnitud, y debe
+  // acumularse en escala LINEAL (no en dB, que no es aditiva), así que
+  // primero se deshace la conversión a dB hecha por calcularMagnitudesDb
+  // (magnitud = 10^(dB/20)) antes de sumar.
+  function calcularAnchoDeBandaOcupado(magnitudesDb, sampleRate, porcentajeEnergia) {
+    const pct = porcentajeEnergia || 0.9;
+    const nyquist = sampleRate / 2;
+    const mitad = magnitudesDb.length;
+    const potencias = new Array(mitad);
+    let total = 0;
+    for (let k = 0; k < mitad; k++) {
+      const magnitudLineal = Math.pow(10, magnitudesDb[k] / 20);
+      potencias[k] = magnitudLineal * magnitudLineal;
+      total += potencias[k];
+    }
+    if (total <= 0) {
+      return { frecuenciaInferior: 0, frecuenciaSuperior: 0, anchoDeBanda: 0 };
+    }
+    const colaDescartada = (1 - pct) / 2;
+    const umbralInferior = total * colaDescartada;
+    const umbralSuperior = total * (1 - colaDescartada);
+    let acumulado = 0;
+    let binInferior = 0;
+    let binSuperior = mitad - 1;
+    let marcadoInferior = false;
+    for (let k = 0; k < mitad; k++) {
+      acumulado += potencias[k];
+      if (!marcadoInferior && acumulado >= umbralInferior) {
+        binInferior = k;
+        marcadoInferior = true;
+      }
+      if (acumulado >= umbralSuperior) {
+        binSuperior = k;
+        break;
+      }
+    }
+    const frecuenciaInferior = (binInferior / mitad) * nyquist;
+    const frecuenciaSuperior = (binSuperior / mitad) * nyquist;
+    return { frecuenciaInferior: frecuenciaInferior, frecuenciaSuperior: frecuenciaSuperior, anchoDeBanda: frecuenciaSuperior - frecuenciaInferior };
+  }
+
+  // -------------------------------------------------------------------
   // MATEMÁTICA: Energía, Potencia y RMS (dominio del tiempo)
   // -------------------------------------------------------------------
   function calcularEstadisticas(muestras) {
@@ -598,6 +673,10 @@ window.MeynaDSP = (function () {
     aplicarVentanaHann: aplicarVentanaHann,
     calcularMagnitudesDb: calcularMagnitudesDb,
     calcularEstadisticas: calcularEstadisticas,
+    // Fase 3: interpretación automática (frecuencia dominante, ancho de
+    // banda ocupado) — reutilizadas por dsp-interpreter.js.
+    calcularFrecuenciaDominante: calcularFrecuenciaDominante,
+    calcularAnchoDeBandaOcupado: calcularAnchoDeBandaOcupado,
     colorPorDb: colorPorDb,
     dibujarOsciloscopio: dibujarOsciloscopio,
     dibujarFft: dibujarFft,

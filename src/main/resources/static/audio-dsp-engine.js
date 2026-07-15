@@ -14,14 +14,21 @@
 //
 //   sourceNode (de dsp.js)
 //     ├──> analyser original (Fase 1, sin tocar)
-//     └──> filtroA -> filtroB -> cadenaGain -> nodoMezcla -> compresorLimitador ─┬─> analyserProcesada
-//                                                 ▲                              └─> destinoProcesado (MediaStreamAudioDestinationNode)
+//     └──> filtroA -> filtroB -> cadenaGain -> nodoMezcla -> compresorLimitador -> retardoNode -> perdidaGain ─┬─> analyserProcesada
+//                                                 ▲                                                            └─> destinoProcesado (MediaStreamAudioDestinationNode)
 //                                  ruidoGain ──────┘
 //                                     ▲
 //                              ruidoSource (buffer de ruido blanco en loop)
 //
 //   cadenaGain -> analyserSenal   (tap de solo lectura: potencia de la señal filtrada, SIN ruido)
 //   ruidoGain  -> analyserRuido   (tap de solo lectura: potencia del ruido YA escalado, SIN señal)
+//
+// Fase 3 (Laboratorio del Canal): retardoNode (DelayNode) y perdidaGain
+// (GainNode) degradan REALMENTE la señal procesada -no son animaciones-,
+// con la misma filosofía de topología fija que los filtros: siempre están
+// conectados, y "sin degradación" es simplemente retardo=0 / ganancia=1.
+// Como van ANTES de analyserProcesada, la comparación "original vs.
+// procesada" de la pestaña Filtros también refleja retardo/pérdida.
 //
 // Todo el código está comentado en español.
 window.MeynaAudioEngine = (function () {
@@ -35,6 +42,11 @@ window.MeynaAudioEngine = (function () {
   const RUIDO_DURACION_S = 2;           // duración del buffer de ruido en loop.
   const RUIDO_GANANCIA_MAXIMA = 0.35;   // límite superior del aporte del ruido a la mezcla (ver comentario de clipping abajo).
   const FFT_SIZE_POTENCIA = 512;        // tamaño de bloque de los analizadores de potencia (señal/ruido); no necesitan la resolución en frecuencia de la FFT principal, solo un valor estable de energía.
+  const RETARDO_MAXIMO_S = 2;           // margen del DelayNode: sobra frente al pico posible (500ms base + 100ms de jitter = 600ms).
+  const TICK_CANAL_MS = 150;            // período del ticker compartido de jitter/pérdida.
+  const RAMPA_JITTER_S = 0.04;          // constante de tiempo al mover el retardo (evita saltos bruscos; el "wobble" de tono residual es inherente a modular un DelayNode en vivo, igual que en un jitter buffer real).
+  const DURACION_RAFAGA_PERDIDA_S = 0.07; // duración de cada silenciamiento simulado.
+  const RAMPA_PERDIDA_S = 0.005;        // rampa de entrada/salida de la ráfaga (evita el "clic" de un corte instantáneo).
 
   // -------------------------------------------------------------------
   // Estado del motor (nodos del grafo, construidos UNA sola vez y
@@ -51,6 +63,10 @@ window.MeynaAudioEngine = (function () {
   let analyserSenal = null;
   let analyserRuido = null;
   let generadorRuido = null;
+  let retardoNode = null;
+  let perdidaGain = null;
+  let tickerCanalId = null;   // único setInterval compartido para jitter + pérdida.
+  let rafagaPerdidaEnCurso = false;
 
   // Estado "lógico" de filtro/ruido: vive independientemente de si los
   // nodos ya existen o no, para que un usuario pueda dejar configurados
@@ -65,6 +81,16 @@ window.MeynaAudioEngine = (function () {
     q: Q_DEFECTO
   };
   let ruidoEstado = { activo: false, intensidad: 30 };
+
+  // Estado "lógico" del canal (Fase 3): igual criterio que filtroActual,
+  // sobrevive aunque el motor todavía no se haya construido.
+  let canalEstado = {
+    retardoMs: 0,
+    jitterActivo: false,
+    jitterAmplitudMs: 0,
+    perdidaPorcentaje: 0
+  };
+  let contadoresPerdida = { bloquesEvaluados: 0, bloquesDegradados: 0 };
 
   let transmitirProcesado = false;
   const callbacksCambioPista = [];
@@ -227,6 +253,109 @@ window.MeynaAudioEngine = (function () {
   }
 
   // -------------------------------------------------------------------
+  // LABORATORIO DEL CANAL (Fase 3) — retardo, jitter y pérdida REALES
+  // -------------------------------------------------------------------
+  // IMPORTANTE (documentado también en la UI): el jitter y la pérdida
+  // simulados aquí actúan sobre la SEÑAL DE AUDIO ya capturada, con nodos
+  // reales de Web Audio (DelayNode/GainNode) — no son animaciones ni
+  // números inventados. Pero NO son jitter/pérdida de paquetes RTP reales
+  // (eso ocurre en la capa de red/RTP, inaccesible desde JavaScript en el
+  // navegador). Las métricas "reales" de WebRTC (bitrate/jitter/pérdida/
+  // RTT medidos por getStats()) se muestran aparte y nunca se confunden
+  // con estos valores configurados.
+
+  function aplicarRetardoBase() {
+    if (!retardoNode || !audioCtxRef) return;
+    const base = canalEstado.retardoMs / 1000;
+    retardoNode.delayTime.setTargetAtTime(base, audioCtxRef.currentTime, RAMPA_JITTER_S);
+  }
+
+  function configurarRetardo(ms) {
+    canalEstado.retardoMs = Math.max(0, Number(ms) || 0);
+    aplicarRetardoBase();
+    actualizarIndicadoresCanal();
+  }
+
+  function configurarJitter(opciones) {
+    if (opciones.activo !== undefined) canalEstado.jitterActivo = !!opciones.activo;
+    if (opciones.amplitudMs !== undefined) canalEstado.jitterAmplitudMs = Math.max(0, Number(opciones.amplitudMs) || 0);
+    if (!canalEstado.jitterActivo) {
+      // Al desactivar, el retardo vuelve limpiamente a su valor base (sin
+      // dejar una variación "congelada" a mitad de camino).
+      aplicarRetardoBase();
+    }
+    actualizarIndicadoresCanal();
+  }
+
+  function configurarPerdida(opciones) {
+    if (opciones.porcentaje !== undefined) canalEstado.perdidaPorcentaje = Math.min(100, Math.max(0, Number(opciones.porcentaje) || 0));
+    if (opciones.porcentaje !== undefined) {
+      contadoresPerdida = { bloquesEvaluados: 0, bloquesDegradados: 0 }; // reiniciar el conteo al cambiar la configuración
+    }
+    actualizarIndicadoresCanal();
+  }
+
+  // Único tick compartido (cada TICK_CANAL_MS) para jitter y pérdida.
+  // Cada rama tiene su propio try/catch: un fallo en una no debe impedir
+  // que la otra se siga evaluando en el mismo tick (mismo criterio
+  // fail-safe que el resto del motor).
+  function tickCanal() {
+    try {
+      if (canalEstado.jitterActivo && retardoNode && audioCtxRef) {
+        const amplitudS = canalEstado.jitterAmplitudMs / 1000;
+        const offset = (Math.random() * 2 - 1) * amplitudS; // uniforme en [-amplitud, +amplitud]
+        const nuevoRetardo = Math.max(0, canalEstado.retardoMs / 1000 + offset);
+        retardoNode.delayTime.setTargetAtTime(nuevoRetardo, audioCtxRef.currentTime, RAMPA_JITTER_S);
+      }
+    } catch (err) {
+      console.warn('MeynaAudioEngine: error al aplicar jitter', err);
+    }
+
+    try {
+      if (canalEstado.perdidaPorcentaje > 0 && perdidaGain && audioCtxRef && !rafagaPerdidaEnCurso) {
+        contadoresPerdida.bloquesEvaluados++;
+        if (Math.random() * 100 < canalEstado.perdidaPorcentaje) {
+          contadoresPerdida.bloquesDegradados++;
+          dispararRafagaPerdida();
+        }
+        // Refresca el indicador "bloques degradados/evaluados" en cada
+        // tick (no solo cuando el usuario cambia el control): si no, el
+        // contador crece internamente pero la UI queda congelada en 0/0.
+        actualizarIndicadoresCanal();
+      }
+    } catch (err) {
+      console.warn('MeynaAudioEngine: error al aplicar pérdida artificial', err);
+    }
+  }
+
+  function dispararRafagaPerdida() {
+    rafagaPerdidaEnCurso = true;
+    const ahora = audioCtxRef.currentTime;
+    // cancelAndHoldAtTime evita el salto que produciría cancelar y volver a
+    // programar sobre un valor de .value potencialmente desactualizado
+    // (solo se refresca una vez por quantum de renderizado de audio).
+    perdidaGain.gain.cancelAndHoldAtTime(ahora);
+    perdidaGain.gain.setTargetAtTime(0.05, ahora, RAMPA_PERDIDA_S); // silencio casi total, no absoluto (evita un corte 100% seco)
+    const finRafaga = ahora + DURACION_RAFAGA_PERDIDA_S;
+    perdidaGain.gain.setTargetAtTime(1, finRafaga, RAMPA_PERDIDA_S);
+    setTimeout(function () {
+      rafagaPerdidaEnCurso = false;
+    }, (DURACION_RAFAGA_PERDIDA_S + RAMPA_PERDIDA_S * 3) * 1000);
+  }
+
+  function iniciarTickerCanal() {
+    if (tickerCanalId !== null) return; // nunca más de un intervalo activo.
+    tickerCanalId = setInterval(tickCanal, TICK_CANAL_MS);
+  }
+
+  function detenerTickerCanal() {
+    if (tickerCanalId !== null) {
+      clearInterval(tickerCanalId);
+      tickerCanalId = null;
+    }
+  }
+
+  // -------------------------------------------------------------------
   // MÉTRICAS — relación señal-ruido (SNR)
   // -------------------------------------------------------------------
   // SNR_dB = 10·log10(P_señal / P_ruido), la fórmula estándar para
@@ -294,23 +423,37 @@ window.MeynaAudioEngine = (function () {
     compresorLimitador.release.setValueAtTime(0.25, audioCtx.currentTime);
     nodoMezcla.connect(compresorLimitador);
 
+    // Fase 3 — Laboratorio del Canal: retardo y pérdida artificiales,
+    // REALES sobre la señal (no una animación). Topología fija, igual
+    // criterio que los filtros: "sin degradación" es simplemente
+    // retardo=0 / ganancia=1, nunca se desconectan estos nodos.
+    retardoNode = audioCtx.createDelay(RETARDO_MAXIMO_S);
+    retardoNode.delayTime.value = 0;
+    compresorLimitador.connect(retardoNode);
+
+    perdidaGain = audioCtx.createGain();
+    perdidaGain.gain.value = 1;
+    retardoNode.connect(perdidaGain);
+
     analyserProcesada = audioCtx.createAnalyser();
     // Mismo tamaño de bloque que el analizador original de dsp.js, para
     // que la comparación FFT original-vs-procesada use igual resolución
     // en frecuencia y sea directamente comparable.
     analyserProcesada.fftSize = window.MeynaDSP.FFT_SIZE;
-    compresorLimitador.connect(analyserProcesada);
+    perdidaGain.connect(analyserProcesada);
 
     destinoProcesado = audioCtx.createMediaStreamDestination();
-    compresorLimitador.connect(destinoProcesado);
+    perdidaGain.connect(destinoProcesado);
     // Importante: NUNCA conectamos a audioCtx.destination (evitar eco del
     // propio micrófono), igual que hace dsp.js con su analyser original.
 
-    // Aplicamos el estado guardado (por si el usuario configuró filtro o
-    // ruido ANTES de iniciar la transmisión, mientras el motor no existía).
+    // Aplicamos el estado guardado (por si el usuario configuró filtro,
+    // ruido o canal ANTES de iniciar la transmisión, mientras el motor no
+    // existía).
     aplicarParametrosFiltro();
     generadorRuido.setActivo(ruidoEstado.activo);
     generadorRuido.setIntensidad(ruidoEstado.intensidad);
+    aplicarRetardoBase();
   }
 
   // Se llama justo DESPUÉS de MeynaDSP.attachStream() en cada startMedia()
@@ -333,6 +476,7 @@ window.MeynaAudioEngine = (function () {
       // conectarRamaAdicional devuelve false sin lanzar error.
       const conectado = window.MeynaDSP.conectarRamaAdicional(filtroA);
       actualizarEstadoDisponibilidad(conectado);
+      iniciarTickerCanal();
     } catch (err) {
       console.warn('MeynaAudioEngine: no se pudo inicializar el procesamiento de audio', err);
     }
@@ -340,6 +484,7 @@ window.MeynaAudioEngine = (function () {
 
   function detachStream() {
     actualizarEstadoDisponibilidad(false);
+    detenerTickerCanal();
   }
 
   // -------------------------------------------------------------------
@@ -447,6 +592,24 @@ window.MeynaAudioEngine = (function () {
       hint.textContent = disponible
         ? ''
         : 'El procesamiento requiere una pista de audio activa (no disponible en el modo actual).';
+    }
+  }
+
+  // Indicadores propios del motor que también se muestran en la pestaña
+  // "Canal" (dsp-channel.js); ese módulo sincroniza sus propios controles
+  // (sliders/selects) por separado, esto solo actualiza los textos.
+  function actualizarIndicadoresCanal() {
+    const elRetardo = document.getElementById('dspChannelDelayIndicator');
+    if (elRetardo) elRetardo.textContent = canalEstado.retardoMs + ' ms';
+    const elJitter = document.getElementById('dspChannelJitterIndicator');
+    if (elJitter) {
+      elJitter.textContent = canalEstado.jitterActivo ? ('±' + canalEstado.jitterAmplitudMs + ' ms') : 'Desactivado';
+    }
+    const elPerdida = document.getElementById('dspChannelLossIndicator');
+    if (elPerdida) elPerdida.textContent = canalEstado.perdidaPorcentaje + ' %';
+    const elBloques = document.getElementById('dspChannelLossBlocksIndicator');
+    if (elBloques) {
+      elBloques.textContent = contadoresPerdida.bloquesDegradados + ' / ' + contadoresPerdida.bloquesEvaluados;
     }
   }
 
@@ -606,6 +769,25 @@ window.MeynaAudioEngine = (function () {
     obtenerAnalyserProcesada: function () { return analyserProcesada; },
     obtenerAnalyserSenal: function () { return analyserSenal; },
     obtenerAnalyserRuido: function () { return analyserRuido; },
-    FFT_SIZE_POTENCIA: FFT_SIZE_POTENCIA
+    FFT_SIZE_POTENCIA: FFT_SIZE_POTENCIA,
+    // Fase 3 — Laboratorio del Canal.
+    configurarRetardo: configurarRetardo,
+    configurarJitter: configurarJitter,
+    configurarPerdida: configurarPerdida,
+    // Getters de solo lectura para que dsp-channel.js / dsp-interpreter.js
+    // / dsp-experiment.js reutilicen el estado sin recalcularlo ni
+    // duplicar variables propias.
+    obtenerConfiguracionFiltro: function () { return Object.assign({}, filtroActual); },
+    obtenerConfiguracionRuido: function () { return Object.assign({}, ruidoEstado); },
+    obtenerConfiguracionCanalAudio: function () {
+      return {
+        retardoMs: canalEstado.retardoMs,
+        jitterActivo: canalEstado.jitterActivo,
+        jitterAmplitudMs: canalEstado.jitterAmplitudMs,
+        perdidaPorcentaje: canalEstado.perdidaPorcentaje,
+        bloquesEvaluados: contadoresPerdida.bloquesEvaluados,
+        bloquesDegradados: contadoresPerdida.bloquesDegradados
+      };
+    }
   };
 })();

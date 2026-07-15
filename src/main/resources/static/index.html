@@ -55,10 +55,13 @@
     th, td { text-align: left; padding: 8px; border-bottom: 1px solid var(--border); font-size: 0.95rem; }
     @media (max-width: 900px) { .grid-2, .metrics-grid, .row { grid-template-columns: 1fr; } }
     /* Laboratorio DSP: pestañas y canvases de visualización. */
-    .dsp-tabs { display: grid; gap: 8px; grid-template-columns: repeat(5, minmax(0, 1fr)); margin-top: 12px; }
+    /* flex-wrap en vez de grid rígido: con 8 pestañas (Fases 1-3) un grid
+       de columnas fijas dejaría huecos o filas desparejas; flex reparte y
+       envuelve de forma natural sin saturar la interfaz. */
+    .dsp-tabs { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+    .dsp-tabs .dsp-tab-btn { flex: 1 1 130px; }
     .dsp-tab-btn.active { background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #07111f; }
     .dsp-tab-content canvas { width: 100%; height: auto; max-width: 100%; background: #02070d; border-radius: 10px; border: 1px solid var(--border); }
-    @media (max-width: 900px) { .dsp-tabs { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
     /* Fase 2: pestaña "Filtros" (procesamiento). */
     .dsp-filter-section { margin-top: 14px; }
     .dsp-filter-section h4 { margin-bottom: 4px; }
@@ -171,6 +174,9 @@
             <button class="secondary dsp-tab-btn" data-target="dspTabEspectrograma">Espectrograma</button>
             <button class="secondary dsp-tab-btn" data-target="dspTabEstadisticas">Estadísticas</button>
             <button class="secondary dsp-tab-btn" data-target="dspTabFiltros">Filtros</button>
+            <button class="secondary dsp-tab-btn" data-target="dspTabCanal">Canal</button>
+            <button class="secondary dsp-tab-btn" data-target="dspTabInterpretacion">Interpretación</button>
+            <button class="secondary dsp-tab-btn" data-target="dspTabExperimento">Experimento</button>
           </div>
 
           <div id="dspTabOsciloscopio" class="dsp-tab-content chart-box">
@@ -318,6 +324,171 @@
               <canvas id="dspProcessedSpectrogramCanvas" width="1020" height="200"></canvas>
             </div>
           </div>
+
+          <div id="dspTabCanal" class="dsp-tab-content" style="display: none;">
+            <h4>Laboratorio del Canal</h4>
+            <p class="small">Degrada de verdad la señal procesada para estudiar cómo cambian el audio y las métricas. El retardo/jitter/pérdida son simulaciones académicas <strong>sobre la señal</strong> (nodos reales de Web Audio) — no son pérdida ni jitter de paquetes RTP reales. El límite de bitrate sí es real: usa la API de WebRTC (<code>RTCRtpSender</code>).</p>
+
+            <div class="dsp-filter-section">
+              <h4>Retardo y jitter (simulación sobre la señal)</h4>
+              <label class="hint" for="dspChannelDelay">Retardo base</label>
+              <select id="dspChannelDelay">
+                <option value="0">0 ms</option>
+                <option value="50">50 ms</option>
+                <option value="100">100 ms</option>
+                <option value="200">200 ms</option>
+                <option value="500">500 ms</option>
+              </select>
+              <label class="hint" for="dspChannelJitter">Jitter artificial</label>
+              <select id="dspChannelJitter">
+                <option value="0">Desactivado</option>
+                <option value="10">±10 ms</option>
+                <option value="25">±25 ms</option>
+                <option value="50">±50 ms</option>
+                <option value="100">±100 ms</option>
+              </select>
+              <div class="metrics-grid">
+                <div class="metrics-card"><strong>Retardo configurado</strong><div id="dspChannelDelayIndicator" class="small">0 ms</div></div>
+                <div class="metrics-card"><strong>Jitter configurado</strong><div id="dspChannelJitterIndicator" class="small">Desactivado</div></div>
+              </div>
+            </div>
+
+            <div class="dsp-filter-section">
+              <h4>Pérdida artificial (simulación a nivel de señal/aplicación, no de paquetes RTP)</h4>
+              <select id="dspChannelLoss">
+                <option value="0">0 %</option>
+                <option value="1">1 %</option>
+                <option value="3">3 %</option>
+                <option value="5">5 %</option>
+                <option value="10">10 %</option>
+                <option value="20">20 %</option>
+              </select>
+              <div class="metrics-grid">
+                <div class="metrics-card"><strong>Pérdida configurada</strong><div id="dspChannelLossIndicator" class="small">0 %</div></div>
+                <div class="metrics-card"><strong>Bloques degradados / evaluados</strong><div id="dspChannelLossBlocksIndicator" class="small">0 / 0</div></div>
+              </div>
+            </div>
+
+            <div class="dsp-filter-section">
+              <h4>Límite de bitrate (real, WebRTC)</h4>
+              <select id="dspChannelBitrate">
+                <option value="auto">Automático</option>
+                <option value="16000">16 kbps</option>
+                <option value="32000">32 kbps</option>
+                <option value="64000">64 kbps</option>
+                <option value="128000">128 kbps</option>
+              </select>
+              <div class="metrics-grid">
+                <div class="metrics-card"><strong>Bitrate objetivo</strong><div id="dspChannelBitrateTargetIndicator" class="small">Automático</div></div>
+                <div class="metrics-card"><strong>Bitrate real medido</strong><div id="dspChannelBitrateRealIndicator" class="small">0 kbps</div></div>
+                <div class="metrics-card"><strong>Diferencia</strong><div id="dspChannelBitrateDiffIndicator" class="small">—</div></div>
+              </div>
+            </div>
+
+            <div class="dsp-filter-section">
+              <h4>Ruido del canal</h4>
+              <p class="small">Reutiliza el mismo motor de ruido de la pestaña Filtros; los cambios se reflejan en ambos lados.</p>
+              <div class="dsp-preset-row">
+                <button class="secondary" id="dspChannelNoiseOff">Desactivado</button>
+                <button class="secondary" id="dspChannelNoiseSuave">Suave</button>
+                <button class="secondary" id="dspChannelNoiseModerado">Moderado</button>
+                <button class="secondary" id="dspChannelNoiseFuerte">Fuerte</button>
+              </div>
+              <button class="secondary" id="dspChannelResetBtn" style="margin-top: 10px;">Restaurar retardo/jitter/pérdida/bitrate</button>
+            </div>
+
+            <div class="dsp-filter-section">
+              <h4>Presets del canal</h4>
+              <p class="small">Configuraciones educativas de referencia, no estándares universales de red.</p>
+              <div class="dsp-preset-row">
+                <button class="secondary" id="dspChannelPresetIdeal">Canal ideal</button>
+                <button class="secondary" id="dspChannelPresetEstable">Red estable</button>
+                <button class="secondary" id="dspChannelPresetCongestionada">Red congestionada</button>
+                <button class="secondary" id="dspChannelPresetDeficiente">Red deficiente</button>
+              </div>
+              <div class="dsp-preset-row" style="margin-top: 8px;">
+                <button class="secondary" id="dspChannelPresetTelefonico">Canal telefónico degradado</button>
+              </div>
+            </div>
+          </div>
+
+          <div id="dspTabInterpretacion" class="dsp-tab-content" style="display: none;">
+            <h4>Interpretación automática</h4>
+            <p class="small">Reglas determinísticas en JavaScript sobre datos reales (sin IA externa ni servicios remotos). Estimación educativa, no una medición absoluta.</p>
+
+            <div class="dsp-filter-section">
+              <h4>Espectro (señal procesada)</h4>
+              <div class="metrics-grid">
+                <div class="metrics-card"><strong>Frecuencia dominante</strong><div id="dspInterpDominantFreq" class="small">—</div></div>
+                <div class="metrics-card"><strong>Magnitud</strong><div id="dspInterpDominantMag" class="small">—</div></div>
+                <div class="metrics-card"><strong>Banda ocupada (90%)</strong><div id="dspInterpBandwidthLow" class="small">—</div></div>
+                <div class="metrics-card"><strong>Ancho de banda</strong><div id="dspInterpBandwidthTotal" class="small">—</div></div>
+              </div>
+              <p class="small">Límite superior de la banda: <span id="dspInterpBandwidthHigh">—</span></p>
+            </div>
+
+            <div class="dsp-filter-section">
+              <h4>Efecto del filtro</h4>
+              <p class="small" id="dspInterpFilterEffect">—</p>
+            </div>
+
+            <div class="dsp-filter-section">
+              <h4>Cambio de SNR (original vs. procesada)</h4>
+              <div class="metrics-grid">
+                <div class="metrics-card"><strong>SNR original</strong><div id="dspInterpSnrBefore" class="small">—</div></div>
+                <div class="metrics-card"><strong>SNR procesada</strong><div id="dspInterpSnrAfter" class="small">—</div></div>
+                <div class="metrics-card"><strong>Diferencia</strong><div id="dspInterpSnrDelta" class="small">—</div></div>
+                <div class="metrics-card"><strong>Veredicto</strong><div id="dspInterpSnrVerdict" class="small">—</div></div>
+              </div>
+            </div>
+
+            <div class="dsp-filter-section">
+              <h4>Clasificación de calidad</h4>
+              <p class="small">Combina pérdida/jitter/RTT reales de WebRTC + SNR procesado, con umbrales explícitos (0=excelente..3=deficiente por factor). Estimación educativa, no una verdad absoluta.</p>
+              <div class="metrics-grid">
+                <div class="metrics-card"><strong>Calidad estimada</strong><div id="dspInterpQuality" class="small">—</div></div>
+              </div>
+              <p class="small" id="dspInterpQualityBreakdown">—</p>
+            </div>
+
+            <div class="dsp-filter-section">
+              <h4>Explicación en lenguaje natural</h4>
+              <p class="small" id="dspInterpExplanation">Esperando datos suficientes…</p>
+            </div>
+          </div>
+
+          <div id="dspTabExperimento" class="dsp-tab-content" style="display: none;">
+            <h4>Modo Experimento</h4>
+            <p class="small">Registra métricas durante una prueba controlada y genera un resumen automático. Los datos solo se guardan en memoria del navegador (no hay base de datos todavía).</p>
+
+            <div class="dsp-filter-section">
+              <label class="hint" for="dspExpName">Nombre del experimento</label>
+              <input id="dspExpName" type="text" placeholder="ej. pasa-bajos con ruido" value="experimento-1" />
+              <label class="hint" for="dspExpDuration">Duración</label>
+              <select id="dspExpDuration">
+                <option value="10">10 s</option>
+                <option value="30" selected>30 s</option>
+                <option value="60">60 s</option>
+                <option value="manual">Manual (hasta detener)</option>
+              </select>
+              <div class="row" style="margin-top: 10px;">
+                <button class="primary" id="dspExpStartBtn">Iniciar experimento</button>
+                <button class="secondary" id="dspExpStopBtn" disabled>Detener</button>
+                <button class="secondary" id="dspExpResetBtn">Reiniciar</button>
+              </div>
+              <div id="dspExpStatus" class="status small">Sin experimento en curso.</div>
+            </div>
+
+            <div class="dsp-filter-section">
+              <h4>Resultado</h4>
+              <div id="dspExpReportBox"><p class="small">Sin experimento ejecutado todavía.</p></div>
+              <div class="row" style="margin-top: 10px;">
+                <button class="secondary" id="dspExpExportJson">Descargar JSON</button>
+                <button class="secondary" id="dspExpExportCsv">Descargar CSV</button>
+                <button class="secondary" id="dspExpCopyBtn">Copiar resumen</button>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -332,6 +503,15 @@
        ANTES del script principal (dependen del HTML de la pestaña "Filtros"). -->
   <script src="/audio-dsp-engine.js"></script>
   <script src="/dsp-visualizer.js"></script>
+  <!-- Fase 3: Laboratorio del Canal, Interpretación automática y Modo
+       Experimento. dsp-channel.js depende de audio-dsp-engine.js;
+       dsp-interpreter.js depende de dsp.js + audio-dsp-engine.js +
+       dsp-channel.js; dsp-experiment.js depende de dsp-interpreter.js +
+       dsp-channel.js -por eso este orden exacto-, y de los 3 antes del
+       script principal (dependen del HTML de sus pestañas). -->
+  <script src="/dsp-channel.js"></script>
+  <script src="/dsp-interpreter.js"></script>
+  <script src="/dsp-experiment.js"></script>
   <script>
     // =====================================================
     // LABORATORIO MULTIMEDIA MEYNARTC
@@ -375,6 +555,20 @@
     const receiverSummary = document.getElementById('receiverSummary');
     const receiversTableBody = document.getElementById('receiversTableBody');
     const receiverSelect = document.getElementById('receiverSelect');
+
+    // Getter de las métricas REALES de WebRTC (ya medidas por
+    // startStatsMonitor() con getStats(), abajo) para que
+    // dsp-interpreter.js / dsp-experiment.js las reutilicen sin volver a
+    // medir nada ni inventar un valor. Nunca confundir con las
+    // degradaciones artificiales configuradas en la pestaña "Canal".
+    window.obtenerMetricasWebRTC = function () {
+      return {
+        bitrate: parseFloat(bitrateValue.textContent) || 0,
+        jitter: parseFloat(jitterValue.textContent) || 0,
+        perdida: parseFloat(lossValue.textContent) || 0,
+        rtt: parseFloat(rttValue.textContent) || 0
+      };
+    };
 
     let socket = null;
     let localStream = null;
@@ -655,6 +849,15 @@
       MeynaAudioEngine.alCambiarPistaActiva(aplicarPistaAudioATodosLosOyentes);
     }
 
+    // Fase 3: cuando cambia el bitrate objetivo en la pestaña "Canal", se
+    // reaplica a TODOS los senders de audio activos (RTCRtpSender real,
+    // no simulado). Mismo patrón que aplicarPistaAudioATodosLosOyentes.
+    if (window.MeynaDspChannel) {
+      MeynaDspChannel.alCambiarBitrate(function () {
+        MeynaDspChannel.aplicarLimiteBitrateATodos(peerConnections);
+      });
+    }
+
     async function switchMode(nextMode) {
       if (!broadcastActive || !localStream) return;
       const stream = await startMedia(nextMode);
@@ -679,6 +882,13 @@
         }
         await renegotiatePeerConnection(clientId, pc);
       }
+      // Fase 3: la renegociación puede crear un sender de audio NUEVO (sin
+      // límite de bitrate aplicado todavía) en vez de reutilizar el
+      // existente vía replaceTrack; reaplicar aquí a todos cierra ese caso
+      // borde sin necesidad de rastrear cuál PC tomó cuál camino.
+      if (window.MeynaDspChannel) {
+        await MeynaDspChannel.aplicarLimiteBitrateATodos(peerConnections);
+      }
       updateStatus(`Modo cambiado: ${describeMode(nextMode)}`);
     }
 
@@ -689,9 +899,10 @@
       // "Transmitir audio procesado" ya estaba activo cuando este oyente
       // se unió); la de video sigue viniendo tal cual de localStream.
       const pistaAudioInicial = obtenerPistaAudioParaEnvio(localStream);
+      let audioSenderInicial = null;
       localStream.getTracks().forEach(track => {
         if (track.kind === 'audio') {
-          pc.addTrack(pistaAudioInicial || track, localStream);
+          audioSenderInicial = pc.addTrack(pistaAudioInicial || track, localStream);
         } else {
           pc.addTrack(track, localStream);
         }
@@ -706,6 +917,14 @@
         pcState.textContent = pc.connectionState;
         if (pc.connectionState === 'connected') {
           updateStatus('Conectado');
+          // Fase 3: red de seguridad — algunas versiones de Chrome pueden
+          // rechazar setParameters() si se llama antes de que el
+          // transporte DTLS/ICE esté listo; reintentar aquí, ya conectado,
+          // es idempotente (no hace daño si ya se aplicó antes).
+          if (window.MeynaDspChannel) {
+            const senderAudio = pc.getSenders().find(s => s.track && s.track.kind === 'audio');
+            MeynaDspChannel.aplicarLimiteBitrateA(senderAudio);
+          }
         }
       };
       pc.oniceconnectionstatechange = () => {
@@ -718,6 +937,12 @@
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
       sendSignal('offer', { type: offer.type, sdp: offer.sdp }, clientId);
+      // Fase 3: primer intento de aplicar el límite de bitrate, apenas
+      // negociada la oferta local (ver también el reintento en
+      // onconnectionstatechange arriba).
+      if (window.MeynaDspChannel) {
+        await MeynaDspChannel.aplicarLimiteBitrateA(audioSenderInicial);
+      }
       peerConnections.set(clientId, pc);
       startStatsMonitor(pc);
     }

@@ -123,6 +123,17 @@ fun Application.module() {
             call.respondText(readResource("static/dsp-visualizer.js"), ContentType.Text.JavaScript)
         }
 
+        // Fase 3: Laboratorio del Canal, Interpretación automática y Modo Experimento.
+        get("/dsp-channel.js") {
+            call.respondText(readResource("static/dsp-channel.js"), ContentType.Text.JavaScript)
+        }
+        get("/dsp-interpreter.js") {
+            call.respondText(readResource("static/dsp-interpreter.js"), ContentType.Text.JavaScript)
+        }
+        get("/dsp-experiment.js") {
+            call.respondText(readResource("static/dsp-experiment.js"), ContentType.Text.JavaScript)
+        }
+
         // Genera un captcha simple para el formulario de login del emisor.
         get("/captcha") {
             val token = UUID.randomUUID().toString()
